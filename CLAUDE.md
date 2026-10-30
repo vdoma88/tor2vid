@@ -17,6 +17,6 @@
 - Перекодирование — `transcode.js` (ffmpeg из `ffmpeg-static`). Без ffmpeg
   сервер работает, просто играет только MP4/WebM.
 - Приложение для компьютера — только Windows (`packaging/`, workflow
-  `release.yml`, релиз по тегу `v*`). Новую версию: поднять `version` в
-  package.json и запушить тег.
+  `release.yml`). Собирается при пуше в основную ветку, релиз
+  `v<version>` из package.json; новая версия — поднять `version`.
 - Тексты для людей — по-русски.

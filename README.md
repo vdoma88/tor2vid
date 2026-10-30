@@ -29,11 +29,9 @@ MP4 и WebM играют напрямую. Для остального плее�
 ## Приложение для Windows
 
 Архив со всем нужным (Node.js и ffmpeg внутри) собирает GitHub Actions
-(`.github/workflows/release.yml`) при пуше тега `v*`:
-
-```bash
-git tag v0.2.1 && git push origin v0.2.1
-```
+(`.github/workflows/release.yml`) при каждом изменении кода в основной ветке
+и кладёт в релиз `v<version из package.json>`. Новая версия — поднять
+`version` в package.json.
 
 Ссылка на последнюю сборку:
 https://github.com/vdoma88/tor2vid/releases/latest/download/tor2vid-windows-x64.zip

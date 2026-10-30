@@ -1,8 +1,17 @@
 name: Сборка приложения для Windows
 
+# Сборка при каждом изменении кода приложения. Релиз называется по версии
+# из package.json: новая версия — новый релиз, та же — архив обновляется.
 on:
   push:
-    tags: ['v*']
+    paths:
+      - server.js
+      - transcode.js
+      - package.json
+      - package-lock.json
+      - public/**
+      - packaging/**
+      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
@@ -60,16 +69,16 @@ jobs:
           path: dist/tor2vid-windows-x64.zip
 
       - name: Релиз на GitHub
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         run: |
           set -e
           R="${{ github.repository }}"
+          TAG="v$(node -p "require('./package.json').version")"
           if gh release view "$TAG" -R "$R" > /dev/null 2>&1; then
             gh release upload "$TAG" dist/tor2vid-windows-x64.zip --clobber -R "$R"
           else
-            gh release create "$TAG" dist/tor2vid-windows-x64.zip -R "$R" --title "tor2vid $TAG" \
+            gh release create "$TAG" dist/tor2vid-windows-x64.zip -R "$R" --target "$GITHUB_SHA" --latest --title "tor2vid $TAG" \
               --notes "Приложение для Windows: распакуйте архив и запустите tor2vid.bat. Внутри уже есть Node.js и ffmpeg, ставить ничего не нужно."
           fi
