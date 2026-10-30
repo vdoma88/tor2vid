@@ -25,13 +25,16 @@
     closeTorrent: $('close-torrent'), recent: $('recent'), recentList: $('recent-list'),
     stage: $('stage'), mode: $('mode'), getApp: $('get-app'),
     tc: $('tc'), tcPlay: $('tc-play'), tcTime: $('tc-time'), tcSeek: $('tc-seek'), tcDur: $('tc-dur'),
-    tcAudio: $('tc-audio'), tcMute: $('tc-mute'), tcFull: $('tc-full'),
+    tcAudio: $('tc-audio'), tcSubs: $('tc-subs'), tcMute: $('tc-mute'), tcFull: $('tc-full'),
   };
 
   let config = { local: false, ffmpeg: false };
   // Режим перекодирования: позиция = offset + video.currentTime.
   let tc = null; // { duration, offset, audio, info }
   let seeking = false;
+  let extTracks = []; // внешние .srt из торрента: { label, lang, track }
+  let embTrack = null; // одна дорожка под встроенные субтитры, создаётся один раз
+  let emb = null; // { n, from, timer } — какие встроенные субтитры показываем
 
   let current = null; // описание торрента с сервера
   let currentFile = null;
@@ -155,6 +158,9 @@
 
   function playDirect(f, src) {
     tc = null;
+    stopEmbedded();
+    emb = null;
+    if (embTrack) embTrack.mode = 'disabled';
     els.tc.hidden = true;
     els.video.controls = true;
     resetVideo();
@@ -166,6 +172,9 @@
   // ---------- перекодирование ----------
   async function startTranscode(f) {
     const index = f.index;
+    stopEmbedded();
+    emb = null;
+    if (embTrack) embTrack.mode = 'disabled';
     resetVideo();
     els.tc.hidden = true;
     setStatus('Смотрю, что внутри файла… Это может занять до минуты.', 'wait');
@@ -190,20 +199,122 @@
     renderAudio(info.audio);
     describeMode(info);
     addSubtitles(f);
+    renderSubs(info);
     setStatus('');
     loadTranscode(0);
   }
 
-  function loadTranscode(at) {
+  let loadSeq = 0;
+  async function loadTranscode(at) {
     if (!tc) return;
-    tc.offset = Math.max(0, Math.min(at, tc.duration ? tc.duration - 1 : at));
-    tc.offset = Math.floor(tc.offset);
+    const seq = ++loadSeq;
+    const want = Math.floor(Math.max(0, Math.min(at, tc.duration ? tc.duration - 1 : at)));
+    let start = want;
+    // При перепаковке поток начнётся с ключевого кадра — узнаём, с какого.
+    if (want > 0 && tc.info.copyVideo) {
+      try {
+        const r = await (await fetch(`/api/start/${current.infoHash}/${currentFile}?t=${want}`)).json();
+        if (typeof r.start === 'number') start = r.start;
+      } catch { /* возьмём как есть */ }
+    }
+    if (seq !== loadSeq || !tc) return; // пока ждали, перемотали ещё раз
+    tc.offset = start;
     els.video.pause();
-    els.video.src = `/transcode/${current.infoHash}/${currentFile}?t=${tc.offset}&a=${tc.audio}`;
+    els.video.src = `/transcode/${current.infoHash}/${currentFile}?t=${start}&a=${tc.audio}`;
     shiftCues();
+    resetEmbedded();
     els.video.play().catch(() => {});
     updateTime();
   }
+
+  // ---------- субтитры в режиме перекодирования ----------
+  const subLabel = (x) => [x.title, x.lang && x.lang.toUpperCase(), x.forced && 'только надписи'].filter(Boolean).join(' · ') || `Дорожка ${x.index + 1}`;
+
+  function renderSubs(info) {
+    els.tcSubs.replaceChildren();
+    const add = (value, text, disabled) => {
+      const o = el('option', null, text);
+      o.value = value;
+      o.disabled = Boolean(disabled);
+      els.tcSubs.append(o);
+    };
+    add('off', 'Без субтитров');
+    info.subtitles.forEach((x) => add(`emb:${x.index}`, x.text ? subLabel(x) : `${subLabel(x)} — картинками, не показываются`, !x.text));
+    extTracks.forEach((x, i) => add(`ext:${i}`, `${x.label} · файл`));
+    els.tcSubs.hidden = els.tcSubs.options.length < 2;
+
+    // Звук не русский, а русские субтитры есть — включаем их. Иначе — только «надписи» под язык звука.
+    const audio = info.audio[tc.audio];
+    const audioRu = audio && /^(ru|rus)$/i.test(audio.lang || '');
+    const ru = (lang) => /^(ru|rus)$/i.test(lang || '');
+    let pick = 'off';
+    const embRu = info.subtitles.find((x) => x.text && ru(x.lang) && !x.forced);
+    const extRu = extTracks.findIndex((x) => ru(x.lang));
+    const forced = info.subtitles.find((x) => x.text && x.forced && (!audio || !audio.lang || x.lang === audio.lang));
+    if (!audioRu && embRu) pick = `emb:${embRu.index}`;
+    else if (!audioRu && extRu >= 0) pick = `ext:${extRu}`;
+    else if (forced) pick = `emb:${forced.index}`;
+    els.tcSubs.value = pick;
+    selectSubs(pick);
+  }
+
+  function selectSubs(value) {
+    for (const x of extTracks) x.track.mode = 'disabled';
+    if (embTrack) embTrack.mode = 'disabled';
+    stopEmbedded();
+    emb = null;
+    if (value.startsWith('ext:')) {
+      const x = extTracks[Number(value.slice(4))];
+      if (x) x.track.mode = 'showing';
+    } else if (value.startsWith('emb:')) {
+      if (!embTrack) embTrack = els.video.addTextTrack('subtitles', 'Встроенные', 'ru');
+      embTrack.mode = 'showing';
+      emb = { n: Number(value.slice(4)), from: 0, timer: null };
+      resetEmbedded();
+    }
+  }
+
+  function clearEmbCues() {
+    if (!embTrack || !embTrack.cues) return;
+    for (const cue of [...embTrack.cues]) embTrack.removeCue(cue);
+    // Chrome оставляет на экране реплику, удалённую во время показа, — перерисовываем.
+    if (embTrack.mode === 'showing') {
+      embTrack.mode = 'hidden';
+      embTrack.mode = 'showing';
+    }
+  }
+
+  function stopEmbedded() {
+    if (emb && emb.timer) clearTimeout(emb.timer);
+    clearEmbCues();
+  }
+
+  function resetEmbedded() {
+    if (!emb) return;
+    stopEmbedded();
+    emb.from = 0;
+    emb.timer = setTimeout(pullEmbedded, 1000);
+  }
+
+  // Подтягиваем реплики, которые ffmpeg успел вытащить вместе с видео.
+  async function pullEmbedded() {
+    const my = emb;
+    if (!my || !tc || !current) return;
+    let done = false;
+    try {
+      const r = await (await fetch(`/api/live-subs/${current.infoHash}/${currentFile}/${my.n}?from=${my.from}`)).json();
+      if (emb !== my) return;
+      // Ответ от старого потока (до перемотки) — пропускаем.
+      if (r.start != null && Math.abs(r.start - tc.offset) < 0.01) {
+        for (const c of r.cues) embTrack.addCue(new VTTCue(c.s, c.e, c.text));
+        my.from = r.total;
+        done = r.done;
+      }
+    } catch { /* следующая попытка */ }
+    if (emb === my && !done) my.timer = setTimeout(pullEmbedded, 2000);
+  }
+
+  els.tcSubs.addEventListener('change', () => selectSubs(els.tcSubs.value));
 
   function renderAudio(list) {
     els.tcAudio.replaceChildren();
@@ -230,8 +341,9 @@
       els.formatHint.hidden = false;
       els.formatHint.textContent = 'Видео перекодируется целиком — бесплатному серверу это тяжело, возможны паузы. Для таких файлов лучше скачать приложение и смотреть у себя (внизу страницы).';
     }
-    if (info.subtitles) {
-      els.mode.textContent += ` Встроенные субтитры (${info.subtitles}) пока не показываются.`;
+    const pics = info.subtitles.filter((x) => !x.text).length;
+    if (pics) {
+      els.mode.textContent += ` Субтитры картинками (PGS/VobSub, ${pics}) браузер показать не может.`;
     }
   }
 
@@ -239,7 +351,7 @@
   const cueOrig = new WeakMap();
   function shiftCues() {
     const offset = tc ? tc.offset : 0;
-    for (const track of els.video.textTracks) {
+    for (const { track } of extTracks) {
       for (const cue of track.cues || []) {
         if (!cueOrig.has(cue)) cueOrig.set(cue, [cue.startTime, cue.endTime]);
         const [s0, e0] = cueOrig.get(cue);
@@ -303,6 +415,7 @@
 
   // Субтитры из торрента: сначала те, что названы как видео.
   function addSubtitles(videoFile) {
+    extTracks = [];
     const base = videoFile.name.replace(/\.[^.]+$/, '').toLowerCase();
     const subs = current.files.filter((f) => f.subtitle).sort((a, b) => {
       const sa = a.name.toLowerCase().startsWith(base) ? 0 : 1;
@@ -319,6 +432,7 @@
       if (i === 0 && /^(ru|rus)$/i.test(lang || '')) track.default = true;
       track.addEventListener('load', shiftCues);
       els.video.append(track);
+      extTracks.push({ label: track.label, lang: (lang || '').toLowerCase(), track: track.track });
     });
   }
 
@@ -376,6 +490,8 @@
     if (current) fetch('/api/torrents/' + current.infoHash, { method: 'DELETE' }).catch(() => {});
     clearInterval(pollTimer);
     tc = null;
+    stopEmbedded();
+    emb = null;
     els.tc.hidden = true;
     resetVideo();
     current = null; currentFile = null; currentSource = null;

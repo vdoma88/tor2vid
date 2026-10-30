@@ -7,7 +7,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { FFMPEG, ffmpegAvailable, probe, plan, transcode, jobSpeed, forgetProbes } from './transcode.js';
+import {
+  FFMPEG, ffmpegAvailable, probe, plan, transcode, jobSpeed, forgetProbes, seekPoint, liveSubs, setSubsDir,
+} from './transcode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL = process.env.TOR2VID_LOCAL === '1';
@@ -24,6 +26,7 @@ const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR || path.join(os.tmpdir(), 'tor2vid
 
 fs.rmSync(DOWNLOAD_DIR, { recursive: true, force: true });
 fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+setSubsDir(path.join(DOWNLOAD_DIR, '.subs'));
 
 const client = new WebTorrent({
   maxConns: Number(process.env.MAX_CONNS) || (LOCAL ? 80 : 40),
@@ -260,13 +263,37 @@ app.get('/api/probe/:hash/:index', async (req, res) => {
   }
 });
 
+// С какой секунды реально начнётся поток, если попросить ?t=.
+app.get('/api/start/:hash/:index', async (req, res) => {
+  const f = await fileFor(req, res);
+  if (!f) return;
+  try {
+    const url = loopback(f.t.infoHash, f.index);
+    const info = await probe(f.key, url);
+    res.json({ start: await seekPoint(f.key, url, info, req.query.t) });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+// Встроенные субтитры, вытащенные текущим перекодированием. ?from= — сколько реплик уже есть.
+app.get('/api/live-subs/:hash/:index/:n', async (req, res) => {
+  const t = await findTorrent(req.params.hash);
+  if (!t) return res.status(404).json({ error: 'Торрент не найден.' });
+  const data = liveSubs(`${t.infoHash}:${Number(req.params.index)}`, Number(req.params.n));
+  if (!data) return res.json({ start: null, done: false, total: 0, cues: [] });
+  const from = Math.max(0, Number(req.query.from) || 0);
+  res.set('Cache-Control', 'no-store').json({ start: data.start, done: data.done, total: data.cues.length, cues: data.cues.slice(from) });
+});
+
 // Поток MP4. ?t= — с какой секунды, ?a= — номер звуковой дорожки.
 app.get('/transcode/:hash/:index', async (req, res) => {
   const f = await fileFor(req, res);
   if (!f) return;
   try {
-    const info = await probe(f.key, loopback(f.t.infoHash, f.index));
-    const start = Math.max(0, Number(req.query.t) || 0);
+    const url = loopback(f.t.infoHash, f.index);
+    const info = await probe(f.key, url);
+    const start = await seekPoint(f.key, url, info, req.query.t);
     const audioIndex = Math.max(0, Math.min(info.audio.length - 1, Number(req.query.a) || 0));
     const keepAlive = setInterval(() => touch(f.t), 30_000);
     res.on('close', () => clearInterval(keepAlive));
