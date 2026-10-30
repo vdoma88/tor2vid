@@ -1,0 +1,75 @@
+name: Сборка приложения для Windows
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Зависимости (с ffmpeg для Windows)
+        run: npm ci --omit=dev
+
+      - name: Собрать папку tor2vid
+        run: |
+          set -e
+          D=dist/tor2vid
+          mkdir -p "$D/node"
+          cp -R server.js transcode.js package.json public node_modules "$D/"
+          cp packaging/README.txt packaging/tor2vid.bat "$D/"
+          cp "$(node -p process.execPath)" "$D/node/node.exe"
+
+      - name: Проверка — приложение запускается и видит ffmpeg
+        run: |
+          set -e
+          cd dist/tor2vid
+          TOR2VID_LOCAL=1 OPEN_BROWSER=0 PORT=3900 ./node/node.exe server.js > ../server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3900/api/config > ../config.json; then break; fi
+            sleep 1
+          done
+          cat ../server.log
+          cat ../config.json
+          grep -q '"ffmpeg":true' ../config.json
+          grep -q '"local":true' ../config.json
+          curl -sf http://127.0.0.1:3900/ | grep -q tor2vid
+
+      - name: Архив
+        run: |
+          cd dist
+          7z a -tzip tor2vid-windows-x64.zip tor2vid > /dev/null
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tor2vid-windows-x64
+          path: dist/tor2vid-windows-x64.zip
+
+      - name: Релиз на GitHub
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          R="${{ github.repository }}"
+          if gh release view "$TAG" -R "$R" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/tor2vid-windows-x64.zip --clobber -R "$R"
+          else
+            gh release create "$TAG" dist/tor2vid-windows-x64.zip -R "$R" --title "tor2vid $TAG" \
+              --notes "Приложение для Windows: распакуйте архив и запустите tor2vid.bat. Внутри уже есть Node.js и ffmpeg, ставить ничего не нужно."
+          fi

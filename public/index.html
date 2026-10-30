@@ -47,13 +47,26 @@
     <p class="status" id="status" role="status" aria-live="polite"></p>
 
     <section class="player-card" id="player-card" hidden>
-      <div class="video-frame">
-        <video id="video" controls playsinline preload="auto"></video>
+      <div class="stage" id="stage">
+        <div class="video-frame">
+          <video id="video" controls playsinline preload="auto"></video>
+        </div>
+        <div class="tc" id="tc" hidden>
+          <button type="button" class="tc-btn" id="tc-play" aria-label="Пауза"><span class="ico ico-pause" aria-hidden="true"></span></button>
+          <span class="tc-time" id="tc-time">0:00</span>
+          <input type="range" class="tc-seek" id="tc-seek" min="0" max="1" step="1" value="0" aria-label="Перемотка">
+          <span class="tc-time" id="tc-dur">0:00</span>
+          <label class="visually-hidden" for="tc-audio">Звуковая дорожка</label>
+          <select class="tc-audio" id="tc-audio" hidden></select>
+          <button type="button" class="tc-btn" id="tc-mute" aria-label="Выключить звук"><span class="ico ico-sound" aria-hidden="true"></span></button>
+          <button type="button" class="tc-btn" id="tc-full" aria-label="Во весь экран"><span class="ico ico-full" aria-hidden="true"></span></button>
+        </div>
       </div>
       <div class="now">
         <h2 id="now-title"></h2>
         <div class="stats" id="stats"></div>
         <div class="bar" aria-hidden="true"><span id="bar-fill"></span></div>
+        <p class="mode" id="mode" hidden></p>
         <p class="hint" id="format-hint" hidden></p>
         <div class="actions">
           <button type="button" class="btn btn-secondary" id="copy-link">Ссылка для VLC</button>
@@ -76,9 +89,26 @@
       <ul id="recent-list"></ul>
     </section>
 
+    <section class="get-app" id="get-app" hidden>
+      <div class="get-app-text">
+        <p class="eyebrow">Своё приложение</p>
+        <h2>Запустить у себя на компьютере с Windows</h2>
+        <p>Работает быстрее: к вашему компьютеру могут подключаться раздающие, а MKV и HEVC перекодирует ваш процессор, а не слабый бесплатный сервер. Ничего ставить не нужно — внутри уже есть всё, что надо.</p>
+      </div>
+      <div class="get-app-links">
+        <a class="btn btn-primary" id="dl-win" href="https://github.com/vdoma88/tor2vid/releases/latest/download/tor2vid-windows-x64.zip">Скачать для Windows</a>
+      </div>
+      <ol class="get-app-steps">
+        <li>Распакуйте архив в любую папку.</li>
+        <li>Запустите <code>tor2vid.bat</code>. Если появится «Windows защитила компьютер» — «Подробнее» → «Выполнить в любом случае».</li>
+        <li>Если брандмауэр спросит про доступ к сети — разрешите.</li>
+      </ol>
+      <p class="get-app-note">Откроется браузер с этим же плеером. Пока смотрите, окно с текстом не закрывайте.</p>
+    </section>
+
     <footer class="foot">
       <p>Видео идёт через сервер: он качает из раздачи только нужный кусок и сразу отдаёт его плееру.
-        Браузер играет MP4 и WebM; MKV — не всегда (зависит от кодеков), AVI — нет: для них есть ссылка для VLC.</p>
+        MP4 и WebM играют как есть, MKV, AVI и HEVC сервер на лету перепаковывает или перекодирует в MP4.</p>
       <p>Используйте только раздачи, которые вам можно смотреть.</p>
     </footer>
   </main>

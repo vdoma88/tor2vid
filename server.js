@@ -6,12 +6,19 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+import { FFMPEG, ffmpegAvailable, probe, plan, transcode, jobSpeed, forgetProbes } from './transcode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const LOCAL = process.env.TOR2VID_LOCAL === '1';
 
 const PORT = Number(process.env.PORT) || 3000;
-const MAX_TORRENTS = Number(process.env.MAX_TORRENTS) || 3;
-const IDLE_MS = (Number(process.env.IDLE_MINUTES) || 20) * 60_000;
+let listenPort = PORT;
+const HAS_FFMPEG = await ffmpegAvailable();
+console.log(HAS_FFMPEG ? `ffmpeg: ${FFMPEG}` : 'ffmpeg не найден — перекодирование выключено');
+// На своём компьютере ресурсов больше — держим больше раздач и дольше.
+const MAX_TORRENTS = Number(process.env.MAX_TORRENTS) || (LOCAL ? 6 : 3);
+const IDLE_MS = (Number(process.env.IDLE_MINUTES) || (LOCAL ? 180 : 20)) * 60_000;
 const METADATA_TIMEOUT_MS = 60_000;
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR || path.join(os.tmpdir(), 'tor2vid');
 
@@ -19,8 +26,8 @@ fs.rmSync(DOWNLOAD_DIR, { recursive: true, force: true });
 fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 
 const client = new WebTorrent({
-  maxConns: Number(process.env.MAX_CONNS) || 40,
-  // Бесплатные хостинги не пускают входящие соединения — слушать порт незачем.
+  maxConns: Number(process.env.MAX_CONNS) || (LOCAL ? 80 : 40),
+  // Порт для входящих выбирается случайно; дома его пробросит UPnP, на хостинге он не нужен.
   torrentPort: 0,
   dhtPort: 0,
 });
@@ -40,7 +47,7 @@ const MIME = {
 
 const touch = (t) => lastUsed.set(t.infoHash, Date.now());
 
-function describe(t) {
+function describe(t, withJobs = false) {
   return {
     infoHash: t.infoHash,
     name: t.name,
@@ -62,6 +69,7 @@ function describe(t) {
         playable: PLAYABLE.has(ext),
         browserFriendly: BROWSER_FRIENDLY.has(ext),
         subtitle: ext === '.srt' || ext === '.vtt',
+        transcodeSpeed: withJobs ? jobSpeed(`${t.infoHash}:${index}`) : null,
       };
     }),
   };
@@ -69,6 +77,7 @@ function describe(t) {
 
 function removeTorrent(t) {
   lastUsed.delete(t.infoHash);
+  forgetProbes(t.infoHash);
   return new Promise((resolve) => t.destroy({ destroyStore: true }, () => resolve()));
 }
 
@@ -138,6 +147,8 @@ app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
 
 app.get('/healthz', (req, res) => res.json({ ok: true, torrents: client.torrents.length }));
 
+app.get('/api/config', (req, res) => res.json({ local: LOCAL, ffmpeg: HAS_FFMPEG }));
+
 // Добавить торрент: JSON { magnet } или тело — сам .torrent файл.
 app.post(
   '/api/torrents',
@@ -168,7 +179,7 @@ app.get('/api/torrents', (req, res) => res.json(client.torrents.filter((t) => t.
 app.get('/api/torrents/:hash', async (req, res) => {
   const t = await findTorrent(req.params.hash);
   if (!t) return res.status(404).json({ error: 'Торрент не найден — добавьте его заново.' });
-  res.json(describe(t));
+  res.json(describe(t, true));
 });
 
 app.delete('/api/torrents/:hash', async (req, res) => {
@@ -224,6 +235,47 @@ app.get('/stream/:hash/:index', async (req, res) => {
   stream.pipe(res);
 });
 
+// ---------- перекодирование ----------
+const loopback = (hash, index) => `http://127.0.0.1:${listenPort}/stream/${hash}/${index}`;
+
+async function fileFor(req, res) {
+  if (!HAS_FFMPEG) { res.status(501).json({ error: 'На этом сервере нет ffmpeg.' }); return null; }
+  const t = await findTorrent(req.params.hash);
+  const index = Number(req.params.index);
+  if (!t || !t.ready || !t.files[index]) { res.status(404).json({ error: 'Файл не найден — откройте торрент заново.' }); return null; }
+  touch(t);
+  return { t, index, key: `${t.infoHash}:${index}` };
+}
+
+// Что внутри файла и как его будем показывать.
+app.get('/api/probe/:hash/:index', async (req, res) => {
+  const f = await fileFor(req, res);
+  if (!f) return;
+  try {
+    const info = await probe(f.key, loopback(f.t.infoHash, f.index));
+    const p = plan(info, 0);
+    res.json({ ...info, copyVideo: p.copyVideo, copyAudio: p.copyAudio, heavy: p.heavy, local: LOCAL });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
+// Поток MP4. ?t= — с какой секунды, ?a= — номер звуковой дорожки.
+app.get('/transcode/:hash/:index', async (req, res) => {
+  const f = await fileFor(req, res);
+  if (!f) return;
+  try {
+    const info = await probe(f.key, loopback(f.t.infoHash, f.index));
+    const start = Math.max(0, Number(req.query.t) || 0);
+    const audioIndex = Math.max(0, Math.min(info.audio.length - 1, Number(req.query.a) || 0));
+    const keepAlive = setInterval(() => touch(f.t), 30_000);
+    res.on('close', () => clearInterval(keepAlive));
+    transcode({ key: f.key, url: loopback(f.t.infoHash, f.index), info, start, audioIndex, res });
+  } catch (err) {
+    res.status(422).json({ error: err.message });
+  }
+});
+
 // Субтитры .srt -> .vtt для <track>.
 app.get('/subs/:hash/:index', async (req, res) => {
   const t = await findTorrent(req.params.hash);
@@ -255,7 +307,33 @@ setInterval(() => {
   }
 }, 60_000).unref();
 
-const server = app.listen(PORT, () => console.log(`tor2vid: http://localhost:${PORT}`));
+function openBrowser(url) {
+  const cmd = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
+    : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+  try {
+    spawn(cmd[0], cmd[1], { stdio: 'ignore', detached: true }).on('error', () => {}).unref();
+  } catch { /* нет браузера — адрес уже напечатан */ }
+}
+
+// Локально: если порт занят, берём следующий.
+let server;
+function listen(port, triesLeft) {
+  server = app.listen(port, LOCAL ? '127.0.0.1' : undefined);
+  server.once('listening', () => {
+    listenPort = server.address().port;
+    const url = `http://localhost:${listenPort}`;
+    console.log(`tor2vid: ${url}`);
+    if (LOCAL) {
+      console.log('Окно не закрывайте, пока смотрите. Остановить — Ctrl+C или закрыть окно.');
+      if (process.env.OPEN_BROWSER !== '0') openBrowser(url);
+    }
+  });
+  server.once('error', (err) => {
+    if (err.code === 'EADDRINUSE' && LOCAL && triesLeft > 0) listen(port + 1, triesLeft - 1);
+    else { console.error(err.message); process.exit(1); }
+  });
+}
+listen(PORT, 20);
 
 function shutdown() {
   server.close();

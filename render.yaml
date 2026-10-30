@@ -16,3 +16,9 @@ services:
         value: "30"
       - key: IDLE_MINUTES
         value: "20"
+      - key: TRANSCODE_MAX_HEIGHT
+        value: "480"
+      - key: TRANSCODE_PRESET
+        value: ultrafast
+      - key: MAX_TRANSCODES
+        value: "1"

@@ -14,4 +14,9 @@
 - Строгий CSP: никаких inline-стилей и скриптов, `innerHTML` не использовать.
 - `uint8-util` закреплён на 2.2.6 через `overrides`: с 2.3.x webtorrent 2.8.5
   падает при добавлении любой magnet-ссылки.
+- Перекодирование — `transcode.js` (ffmpeg из `ffmpeg-static`). Без ffmpeg
+  сервер работает, просто играет только MP4/WebM.
+- Приложение для компьютера — только Windows (`packaging/`, workflow
+  `release.yml`, релиз по тегу `v*`). Новую версию: поднять `version` в
+  package.json и запушить тег.
 - Тексты для людей — по-русски.
