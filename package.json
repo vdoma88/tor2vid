@@ -1,0 +1,29 @@
+{
+  "name": "tor2vid",
+  "version": "1.0.0",
+  "description": "Онлайн-плеер для торрентов и magnet-ссылок",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vdoma88/tor2vid.git"
+  },
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/vdoma88/tor2vid/issues"
+  },
+  "homepage": "https://github.com/vdoma88/tor2vid#readme",
+  "dependencies": {
+    "express": "^4.22.3",
+    "webtorrent": "^2.8.5"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "overrides": {
+    "uint8-util": "2.2.6"
+  }
+}

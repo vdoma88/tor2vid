@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: tor2vid
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: MAX_TORRENTS
+        value: "2"
+      - key: MAX_CONNS
+        value: "30"
+      - key: IDLE_MINUTES
+        value: "20"

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tor2vid — смотреть торрент онлайн</title>
+  <meta name="description" content="Вставьте magnet-ссылку или .torrent файл и смотрите видео прямо в браузере, не дожидаясь загрузки.">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>tor2vid</a>
+    <span class="top-note">Тестовая версия</span>
+  </header>
+
+  <main class="wrap">
+    <section class="hero" id="hero">
+      <p class="eyebrow">Торрент → видео</p>
+      <h1>Смотрите торрент, не дожидаясь загрузки</h1>
+      <p class="lead">Вставьте magnet-ссылку или перетащите .torrent файл. Сервер подключится к раздаче и начнёт показывать видео с первых мегабайт.</p>
+    </section>
+
+    <form class="source" id="source-form" autocomplete="off">
+      <label class="visually-hidden" for="magnet">Magnet-ссылка, info-hash или ссылка на .torrent</label>
+      <input id="magnet" name="magnet" type="text" inputmode="url" spellcheck="false"
+             placeholder="magnet:?xt=urn:btih:…  или  https://…/file.torrent">
+      <button class="btn btn-primary" type="submit" id="open-btn">Открыть</button>
+    </form>
+
+    <div class="drop" id="drop">
+      <input type="file" id="file-input" accept=".torrent,application/x-bittorrent" class="visually-hidden">
+      <label for="file-input" class="drop-label">
+        <strong>Выбрать .torrent файл</strong>
+        <span>или перетащите его сюда</span>
+      </label>
+    </div>
+
+    <p class="examples">Проверить на открытых фильмах:
+      <button type="button" class="link" data-example="sintel">Sintel</button> ·
+      <button type="button" class="link" data-example="tears">Tears of Steel</button> ·
+      <button type="button" class="link" data-example="bunny">Big Buck Bunny</button>
+    </p>
+
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+
+    <section class="player-card" id="player-card" hidden>
+      <div class="video-frame">
+        <video id="video" controls playsinline preload="auto"></video>
+      </div>
+      <div class="now">
+        <h2 id="now-title"></h2>
+        <div class="stats" id="stats"></div>
+        <div class="bar" aria-hidden="true"><span id="bar-fill"></span></div>
+        <p class="hint" id="format-hint" hidden></p>
+        <div class="actions">
+          <button type="button" class="btn btn-secondary" id="copy-link">Ссылка для VLC</button>
+          <a class="btn btn-secondary" id="download-link" href="#">Скачать файл</a>
+          <button type="button" class="btn btn-secondary" id="share-link">Поделиться</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="files" id="files" hidden>
+      <div class="files-head">
+        <h2 id="torrent-name"></h2>
+        <button type="button" class="btn btn-tertiary" id="close-torrent">Закрыть</button>
+      </div>
+      <ul id="file-list"></ul>
+    </section>
+
+    <section class="recent" id="recent" hidden>
+      <h2>Недавние</h2>
+      <ul id="recent-list"></ul>
+    </section>
+
+    <footer class="foot">
+      <p>Видео идёт через сервер: он качает из раздачи только нужный кусок и сразу отдаёт его плееру.
+        Браузер играет MP4 и WebM; MKV — не всегда (зависит от кодеков), AVI — нет: для них есть ссылка для VLC.</p>
+      <p>Используйте только раздачи, которые вам можно смотреть.</p>
+    </footer>
+  </main>
+</body>
+</html>
