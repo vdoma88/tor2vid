@@ -7,8 +7,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import {
-  FFMPEG, ffmpegAvailable, probe, plan, transcode, jobSpeed, forgetProbes, seekPoint, liveSubs, setSubsDir,
+  FFMPEG, ffmpegAvailable, probe, plan, transcode, jobSpeed, forgetProbes, seekPoint, liveSubs, setSubsDir, setInputHeader,
 } from './transcode.js';
 import { startCatalog, getCatalog, coverHandler } from './catalog.js';
 
@@ -29,15 +30,39 @@ fs.rmSync(DOWNLOAD_DIR, { recursive: true, force: true });
 fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 setSubsDir(path.join(DOWNLOAD_DIR, '.subs'));
 
+// Только просмотр: сервер ничего не отдаёт другим участникам раздачи.
+// Порт не пробрасываем (UPnP/NAT-PMP выключены), соседей в локальной сети не ищем,
+// а каждое соединение держим «заблокированным» (choke) — см. noUpload().
 const client = new WebTorrent({
   maxConns: Number(process.env.MAX_CONNS) || (LOCAL ? 80 : 40),
-  // Порт для входящих выбирается случайно; дома его пробросит UPnP, на хостинге он не нужен.
   torrentPort: 0,
   dhtPort: 0,
+  natUpnp: false,
+  natPmp: false,
+  lsd: false,
 });
 client.on('error', (err) => console.error('[webtorrent]', err.message));
+client.on('listening', () => console.log('[torrent] порт', client.torrentPort, '— только входящие запросы, отдача выключена'));
 
 const lastUsed = new Map(); // infoHash -> timestamp
+const owners = new Map(); // infoHash -> Set(id сеанса): кто открыл этот торрент
+
+// По протоколу BitTorrent участник, которого мы «душим» (choke), не может
+// получить от нас ни куска: на его запросы библиотека отвечает отказом.
+// Снимать блокировку не даём никому, поэтому отдача невозможна.
+function noUpload(wire) {
+  wire.unchoke = () => {};
+  wire.allowedFast = () => {};
+  wire.choke();
+  // Вторая защита на уровне протокола: отправка куска файла просто не происходит.
+  wire.piece = (index, offset, buffer) => {
+    if (wire.hasFast) wire.reject(index, offset, buffer ? buffer.length : 0);
+  };
+  // Описание торрента (имена и размеры файлов) другим тоже не пересылаем…
+  if (wire.ut_metadata) wire.ut_metadata._onRequest = (piece) => wire.ut_metadata._reject(piece);
+  // …как и адреса других участников (PEX).
+  if (wire.ut_pex) wire.ut_pex._sendMessage = () => {};
+}
 
 const PLAYABLE = new Set(['.mp4', '.m4v', '.webm', '.mkv', '.mov', '.ogv', '.mp3', '.m4a', '.ogg', '.wav', '.flac', '.opus']);
 const BROWSER_FRIENDLY = new Set(['.mp4', '.m4v', '.webm', '.ogv', '.mp3', '.m4a', '.ogg', '.wav', '.opus']);
@@ -81,6 +106,7 @@ function describe(t, withJobs = false) {
 
 function removeTorrent(t) {
   lastUsed.delete(t.infoHash);
+  owners.delete(t.infoHash);
   forgetProbes(t.infoHash);
   return new Promise((resolve) => t.destroy({ destroyStore: true }, () => resolve()));
 }
@@ -114,19 +140,31 @@ function waitReady(t) {
   });
 }
 
-async function addTorrent(source) {
+function own(t, sid) {
+  if (!owners.has(t.infoHash)) owners.set(t.infoHash, new Set());
+  owners.get(t.infoHash).add(sid);
+}
+
+async function addTorrent(source, sid) {
   const existing = await client.get(source).catch(() => null);
   if (existing) {
     touch(existing);
+    own(existing, sid);
     return waitReady(existing);
   }
   await makeRoom();
-  const t = client.add(source, { path: DOWNLOAD_DIR, deselect: true });
+  // uploads: false — не раздаём никому даже по расписанию библиотеки.
+  const t = client.add(source, { path: DOWNLOAD_DIR, deselect: true, uploads: false });
+  t.on('wire', noUpload);
   touch(t);
   // deselect: true — качаем только то, что смотрят; файл выбирается при просмотре.
   t.on('ready', () => console.log('[ready]', t.infoHash, t.name));
   try {
-    return await waitReady(t);
+    await waitReady(t);
+    // info-hash у magnet-ссылки известен только после разбора — записываем владельца здесь.
+    own(t, sid);
+    touch(t);
+    return t;
   } catch (err) {
     await removeTorrent(t);
     throw err;
@@ -137,6 +175,31 @@ async function findTorrent(hash) {
   return client.get(hash).catch(() => null);
 }
 
+// ---------- приватные сеансы ----------
+// У каждого браузера свой сеанс (cookie). Смотреть можно только то, что открыл сам:
+// чужие ссылки на поток не работают, и раздать поток другим по адресу нельзя.
+const INTERNAL = crypto.randomBytes(24).toString('hex'); // для ffmpeg на этом же сервере
+setInputHeader(`X-Tor2vid-Internal: ${INTERNAL}`);
+
+function sessionId(req) {
+  const m = /(?:^|;\s*)sid=([a-f0-9]{32})/.exec(req.headers.cookie || '');
+  return m ? m[1] : null;
+}
+
+function isInternal(req) {
+  const ip = req.socket.remoteAddress || '';
+  return req.get('x-tor2vid-internal') === INTERNAL && /^(::ffff:)?127\.0\.0\.1$|^::1$/.test(ip);
+}
+
+// Торрент, если он открыт этим сеансом (или запрос от нашего же ffmpeg).
+async function ownedTorrent(req, hash) {
+  const t = await findTorrent(hash);
+  if (!t) return null;
+  if (isInternal(req)) return t;
+  const sid = sessionId(req);
+  return sid && owners.get(t.infoHash) && owners.get(t.infoHash).has(sid) ? t : null;
+}
+
 const app = express();
 app.disable('x-powered-by');
 app.use((req, res, next) => {
@@ -145,6 +208,15 @@ app.use((req, res, next) => {
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
   });
+  next();
+});
+app.set('trust proxy', 1);
+app.use((req, res, next) => {
+  if (!sessionId(req) && !isInternal(req)) {
+    const sid = crypto.randomBytes(16).toString('hex');
+    req.headers.cookie = `${req.headers.cookie ? req.headers.cookie + '; ' : ''}sid=${sid}`;
+    res.cookie('sid', sid, { httpOnly: true, sameSite: 'strict', secure: req.secure, maxAge: 30 * 24 * 3600_000, path: '/' });
+  }
   next();
 });
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
@@ -177,7 +249,7 @@ app.post(
     }
     if (!source) return res.status(400).json({ error: 'Нужна magnet-ссылка, info-hash, ссылка на .torrent или сам файл.' });
     try {
-      const t = await addTorrent(source);
+      const t = await addTorrent(source, sessionId(req));
       res.json(describe(t));
     } catch (err) {
       console.error('[add]', err.message);
@@ -186,23 +258,31 @@ app.post(
   },
 );
 
-app.get('/api/torrents', (req, res) => res.json(client.torrents.filter((t) => t.ready).map(describe)));
+app.get('/api/torrents', (req, res) => {
+  const sid = sessionId(req);
+  res.json(client.torrents.filter((t) => t.ready && owners.get(t.infoHash) && owners.get(t.infoHash).has(sid)).map((t) => describe(t)));
+});
 
 app.get('/api/torrents/:hash', async (req, res) => {
-  const t = await findTorrent(req.params.hash);
+  const t = await ownedTorrent(req, req.params.hash);
   if (!t) return res.status(404).json({ error: 'Торрент не найден — добавьте его заново.' });
   res.json(describe(t, true));
 });
 
+// Закрыл — забываем; когда торрент больше никому не нужен, удаляем его вместе с файлами.
 app.delete('/api/torrents/:hash', async (req, res) => {
-  const t = await findTorrent(req.params.hash);
-  if (t) await removeTorrent(t);
+  const t = await ownedTorrent(req, req.params.hash);
+  if (t) {
+    const set = owners.get(t.infoHash);
+    if (set) set.delete(sessionId(req));
+    if (!set || !set.size) await removeTorrent(t);
+  }
   res.json({ ok: true });
 });
 
-// Потоковая отдача файла с поддержкой перемотки (Range).
+// Потоковая отдача файла для плеера (Range — для перемотки). Только своему сеансу.
 app.get('/stream/:hash/:index', async (req, res) => {
-  const t = await findTorrent(req.params.hash);
+  const t = await ownedTorrent(req, req.params.hash);
   if (!t || !t.ready) return res.status(404).send('Торрент не найден');
   const file = t.files[Number(req.params.index)];
   if (!file) return res.status(404).send('Файл не найден');
@@ -214,11 +294,9 @@ app.get('/stream/:hash/:index', async (req, res) => {
   res.set({
     'Accept-Ranges': 'bytes',
     'Content-Type': MIME[ext] || 'application/octet-stream',
-    'Cache-Control': 'no-store',
+    'Cache-Control': 'no-store, private',
+    'Content-Disposition': 'inline',
   });
-  if (req.query.download) {
-    res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`);
-  }
 
   let start = 0;
   let end = total - 1;
@@ -252,7 +330,7 @@ const loopback = (hash, index) => `http://127.0.0.1:${listenPort}/stream/${hash}
 
 async function fileFor(req, res) {
   if (!HAS_FFMPEG) { res.status(501).json({ error: 'На этом сервере нет ffmpeg.' }); return null; }
-  const t = await findTorrent(req.params.hash);
+  const t = await ownedTorrent(req, req.params.hash);
   const index = Number(req.params.index);
   if (!t || !t.ready || !t.files[index]) { res.status(404).json({ error: 'Файл не найден — откройте торрент заново.' }); return null; }
   touch(t);
@@ -287,7 +365,7 @@ app.get('/api/start/:hash/:index', async (req, res) => {
 
 // Встроенные субтитры, вытащенные текущим перекодированием. ?from= — сколько реплик уже есть.
 app.get('/api/live-subs/:hash/:index/:n', async (req, res) => {
-  const t = await findTorrent(req.params.hash);
+  const t = await ownedTorrent(req, req.params.hash);
   if (!t) return res.status(404).json({ error: 'Торрент не найден.' });
   const data = liveSubs(`${t.infoHash}:${Number(req.params.index)}`, Number(req.params.n));
   if (!data) return res.json({ start: null, done: false, total: 0, cues: [] });
@@ -314,7 +392,7 @@ app.get('/transcode/:hash/:index', async (req, res) => {
 
 // Субтитры .srt -> .vtt для <track>.
 app.get('/subs/:hash/:index', async (req, res) => {
-  const t = await findTorrent(req.params.hash);
+  const t = await ownedTorrent(req, req.params.hash);
   const file = t && t.ready && t.files[Number(req.params.index)];
   if (!file || file.length > 2_000_000) return res.status(404).end();
   touch(t);

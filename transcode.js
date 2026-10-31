@@ -16,6 +16,11 @@ if (!ffmpegPath) ffmpegPath = 'ffmpeg'; // системный, если есть
 
 export const FFMPEG = ffmpegPath;
 
+// ffmpeg читает поток с нашего же сервера; заголовок доказывает, что это он.
+let inputHeader = null;
+export function setInputHeader(h) { inputHeader = h; }
+const input = (url) => (inputHeader ? ['-headers', `${inputHeader}\r\n`, '-i', url] : ['-i', url]);
+
 const MAX_HEIGHT = Number(process.env.TRANSCODE_MAX_HEIGHT) || 1080;
 const PRESET = process.env.TRANSCODE_PRESET || 'veryfast';
 const MAX_JOBS = Number(process.env.MAX_TRANSCODES) || 2;
@@ -101,7 +106,7 @@ export function parseProbe(stderr) {
 export function probe(key, url) {
   if (probeCache.has(key)) return probeCache.get(key);
   const p = new Promise((resolve, reject) => {
-    const proc = spawn(FFMPEG, ['-hide_banner', '-i', url], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const proc = spawn(FFMPEG, ['-hide_banner', ...input(url)], { stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
     const timer = setTimeout(() => proc.kill('SIGKILL'), 90_000);
     proc.stderr.on('data', (c) => { err += c; });
@@ -146,7 +151,7 @@ export async function seekPoint(key, url, info, t) {
   const ck = `${key}@${t}`;
   if (seekCache.has(ck)) return seekCache.get(ck);
   const k = await new Promise((resolve) => {
-    const proc = spawn(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-ss', String(t), '-i', url,
+    const proc = spawn(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-ss', String(t), ...input(url),
       '-map', '0:v:0', '-c', 'copy', '-copyts', '-frames:v', '1', '-f', 'framecrc', '-'],
     { stdio: ['ignore', 'pipe', 'ignore'] });
     let outText = '';
@@ -235,7 +240,7 @@ export function transcode({ key, url, info, start = 0, audioIndex = 0, res }) {
 
   const args = ['-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:2'];
   if (start > 0) args.push('-ss', String(start));
-  args.push('-i', url);
+  args.push(...input(url));
   if (info.video) args.push('-map', '0:v:0');
   if (audio) args.push('-map', `0:a:${audio.index}`);
 

@@ -20,7 +20,6 @@
     drop: $('drop'), fileInput: $('file-input'), status: $('status'),
     playerCard: $('player-card'), video: $('video'), nowTitle: $('now-title'),
     stats: $('stats'), barFill: $('bar-fill'), formatHint: $('format-hint'),
-    copyLink: $('copy-link'), downloadLink: $('download-link'), shareLink: $('share-link'),
     files: $('files'), torrentName: $('torrent-name'), fileList: $('file-list'),
     closeTorrent: $('close-torrent'), recent: $('recent'), recentList: $('recent-list'),
     stage: $('stage'), mode: $('mode'), getApp: $('get-app'),
@@ -133,18 +132,16 @@
     const src = `/stream/${current.infoHash}/${index}`;
     els.playerCard.hidden = false;
     els.nowTitle.textContent = f.name;
-    els.downloadLink.href = src + '?download=1';
     els.formatHint.hidden = true;
     els.mode.hidden = true;
     renderFiles();
-    updateUrl();
     els.playerCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
     if (f.browserFriendly || !config.ffmpeg) {
       playDirect(f, src);
       if (!f.browserFriendly) {
         els.formatHint.hidden = false;
-        els.formatHint.textContent = 'Этот формат браузер может не показать, а перекодирование здесь выключено. Если видео не идёт — откройте «Ссылку для VLC».';
+        els.formatHint.textContent = 'Этот формат браузер может не показать, а перекодирование здесь выключено. Если видео не идёт — выберите другой файл.';
       }
     } else {
       startTranscode(f);
@@ -469,24 +466,9 @@
     } catch { /* сеть моргнула — следующий опрос */ }
   }
 
-  // ---------- кнопки ----------
-  els.copyLink.addEventListener('click', async () => {
-    const url = new URL(`/stream/${current.infoHash}/${currentFile}`, location.href).href;
-    try {
-      await navigator.clipboard.writeText(url);
-      setStatus('Ссылка скопирована. В VLC: Медиа → Открыть URL.', 'ok');
-    } catch {
-      window.prompt('Скопируйте ссылку и откройте в VLC (Медиа → Открыть URL):', url);
-    }
-  });
-
-  els.shareLink.addEventListener('click', async () => {
-    const url = location.href;
-    try {
-      if (navigator.share) await navigator.share({ title: current.name, url });
-      else { await navigator.clipboard.writeText(url); setStatus('Ссылка на просмотр скопирована.', 'ok'); }
-    } catch { /* отменили */ }
-  });
+  // Только просмотр: без пункта «Сохранить видео» в меню плеера.
+  els.video.controlsList.add('nodownload');
+  els.video.addEventListener('contextmenu', (e) => e.preventDefault());
 
   els.closeTorrent.addEventListener('click', () => {
     if (current) fetch('/api/torrents/' + current.infoHash, { method: 'DELETE' }).catch(() => {});
@@ -512,7 +494,7 @@
       startTranscode(f);
       return;
     }
-    setStatus('Браузер не смог воспроизвести этот файл. Попробуйте «Ссылку для VLC» или другой файл из списка.', 'error');
+    setStatus('Браузер не смог воспроизвести этот файл. Попробуйте другой файл из списка.', 'error');
   });
   els.video.addEventListener('waiting', () => setStatus('Подгружаю…', 'wait'));
   els.video.addEventListener('playing', () => setStatus(''));
@@ -550,13 +532,7 @@
   }));
   document.addEventListener('drop', (e) => openFile(e.dataTransfer.files[0]));
 
-  // ---------- адрес страницы и история ----------
-  function updateUrl() {
-    const p = new URLSearchParams();
-    p.set('t', currentSource || current.infoHash);
-    p.set('f', String(currentFile));
-    history.replaceState(null, '', '#' + p.toString());
-  }
+  // ---------- история (только в этом браузере) ----------
 
   function rememberRecent(t) {
     const source = currentSource || t.infoHash;
@@ -580,16 +556,6 @@
     }
   }
 
-  async function fromHash() {
-    const p = new URLSearchParams(location.hash.slice(1));
-    const src = p.get('t');
-    if (!src) return;
-    els.input.value = src;
-    await open(src, false, src);
-    const f = Number(p.get('f'));
-    if (current && Number.isInteger(f) && current.files[f] && f !== currentFile) play(f);
-  }
-
   // ---------- вкладки ----------
   let catalogLoaded = false;
 
@@ -601,14 +567,9 @@
       if (t.dataset.tab === name) t.setAttribute('aria-current', 'page');
       else t.removeAttribute('aria-current');
     });
-    if (isCatalog) {
-      history.replaceState(null, '', '#catalog');
-      if (!catalogLoaded) loadCatalog();
-    } else if (current && currentFile != null) {
-      updateUrl();
-    } else {
-      history.replaceState(null, '', location.pathname);
-    }
+    // В адрес страницы ссылка на торрент не попадает — им не поделишься случайно.
+    history.replaceState(null, '', isCatalog ? '#catalog' : location.pathname);
+    if (isCatalog && !catalogLoaded) loadCatalog();
     window.scrollTo({ top: 0 });
   }
 
@@ -681,8 +642,7 @@
     try { config = await (await fetch('/api/config')).json(); } catch { /* по умолчанию */ }
     els.getApp.hidden = Boolean(config.local);
     renderRecent();
-    if (location.hash === '#catalog') showView('catalog');
-    else fromHash();
+    showView(location.hash === '#catalog' ? 'catalog' : 'player');
   }
   init();
 })();

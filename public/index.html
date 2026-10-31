@@ -74,11 +74,6 @@
         <div class="bar" aria-hidden="true"><span id="bar-fill"></span></div>
         <p class="mode" id="mode" hidden></p>
         <p class="hint" id="format-hint" hidden></p>
-        <div class="actions">
-          <button type="button" class="btn btn-secondary" id="copy-link">Ссылка для VLC</button>
-          <a class="btn btn-secondary" id="download-link" href="#">Скачать файл</a>
-          <button type="button" class="btn btn-secondary" id="share-link">Поделиться</button>
-        </div>
       </div>
     </section>
 
@@ -99,7 +94,7 @@
       <div class="get-app-text">
         <p class="eyebrow">Своё приложение</p>
         <h2>Запустить у себя на компьютере с Windows</h2>
-        <p>Работает быстрее: к вашему компьютеру могут подключаться раздающие, а MKV и HEVC перекодирует ваш процессор, а не слабый бесплатный сервер. Ничего ставить не нужно — внутри уже есть всё, что надо.</p>
+        <p>Работает быстрее: MKV и HEVC перекодирует ваш процессор, а не слабый бесплатный сервер. Так же только просмотр — ничего не раздаётся. Ничего ставить не нужно — внутри уже есть всё, что надо.</p>
       </div>
       <div class="get-app-links">
         <a class="btn btn-primary" id="dl-win" href="https://github.com/vdoma88/tor2vid/releases/latest/download/tor2vid-windows-x64.zip">Скачать для Windows</a>
@@ -133,9 +128,11 @@
     </section>
 
     <footer class="foot">
-      <p>Видео идёт через сервер: он качает из раздачи только нужный кусок и сразу отдаёт его плееру.
-        MP4 и WebM играют как есть, MKV, AVI и HEVC сервер на лету перепаковывает или перекодирует в MP4.</p>
-      <p>Используйте только раздачи, которые вам можно смотреть.</p>
+      <p>Это только плеер. Он ничего не раздаёт другим участникам торрент-сети, не даёт скачать файл
+        и не показывает ваш просмотр другим людям: у каждого браузера свой закрытый сеанс.
+        Просмотренное удаляется с сервера, когда вы закрываете торрент или через 20 минут без просмотра.</p>
+      <p>MP4 и WebM играют как есть, MKV, AVI и HEVC сервер на лету перепаковывает или перекодирует в MP4.</p>
+      <p>Открывайте только то, что вам можно смотреть.</p>
     </footer>
   </main>
 </body>
