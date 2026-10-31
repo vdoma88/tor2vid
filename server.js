@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process';
 import {
   FFMPEG, ffmpegAvailable, probe, plan, transcode, jobSpeed, forgetProbes, seekPoint, liveSubs, setSubsDir,
 } from './transcode.js';
+import { startCatalog, getCatalog, coverHandler } from './catalog.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL = process.env.TOR2VID_LOCAL === '1';
@@ -151,6 +152,14 @@ app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
 app.get('/healthz', (req, res) => res.json({ ok: true, torrents: client.torrents.length }));
 
 app.get('/api/config', (req, res) => res.json({ local: LOCAL, ffmpeg: HAS_FFMPEG }));
+
+// Каталог: старое кино из Internet Archive, обновляется раз в сутки.
+startCatalog({
+  cache: path.join(os.tmpdir(), 'tor2vid-catalog.json'),
+  seed: path.join(__dirname, 'data', 'catalog.json'),
+});
+app.get('/api/catalog', (req, res) => res.set('Cache-Control', 'public, max-age=600').json(getCatalog()));
+app.get('/cover/:id', (req, res) => coverHandler(req, res, path.join(os.tmpdir(), 'tor2vid-covers')));
 
 // Добавить торрент: JSON { magnet } или тело — сам .torrent файл.
 app.post(

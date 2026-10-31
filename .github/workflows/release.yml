@@ -9,6 +9,8 @@ on:
       - transcode.js
       - package.json
       - package-lock.json
+      - catalog.js
+      - data/**
       - public/**
       - packaging/**
       - .github/workflows/release.yml
@@ -38,7 +40,7 @@ jobs:
           set -e
           D=dist/tor2vid
           mkdir -p "$D/node"
-          cp -R server.js transcode.js package.json public node_modules "$D/"
+          cp -R server.js transcode.js catalog.js package.json public data node_modules "$D/"
           cp packaging/README.txt packaging/tor2vid.bat "$D/"
           cp "$(node -p process.execPath)" "$D/node/node.exe"
 

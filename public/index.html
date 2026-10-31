@@ -13,10 +13,14 @@
 <body>
   <header class="top">
     <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>tor2vid</a>
-    <span class="top-note">Тестовая версия</span>
+    <nav class="tabs" aria-label="Разделы">
+      <a class="tab" href="#" data-tab="player" aria-current="page">Плеер</a>
+      <a class="tab" href="#catalog" data-tab="catalog">Каталог</a>
+    </nav>
   </header>
 
   <main class="wrap">
+   <div id="view-player">
     <section class="hero" id="hero">
       <p class="eyebrow">Торрент → видео</p>
       <h1>Смотрите торрент, не дожидаясь загрузки</h1>
@@ -106,6 +110,26 @@
         <li>Если брандмауэр спросит про доступ к сети — разрешите.</li>
       </ol>
       <p class="get-app-note">Откроется браузер с этим же плеером. Пока смотрите, окно с текстом не закрывайте.</p>
+    </section>
+
+   </div>
+
+    <section class="catalog" id="view-catalog" hidden>
+      <div class="hero hero-sm">
+        <p class="eyebrow">Каталог</p>
+        <h1>Классика кино на русском</h1>
+        <p class="lead">Самые популярные советские фильмы из Internet Archive, которые там отмечены как общественное достояние. Список обновляется раз в сутки, всё открывается в этом же плеере.</p>
+      </div>
+      <p class="status" id="catalog-status" role="status" aria-live="polite"></p>
+      <div id="catalog-films" hidden>
+        <h2 class="shelf-title">Фильмы <span class="shelf-count" id="films-count"></span></h2>
+        <ul class="shelf" id="films-list"></ul>
+      </div>
+      <div id="catalog-cartoons" hidden>
+        <h2 class="shelf-title">Мультфильмы <span class="shelf-count" id="cartoons-count"></span></h2>
+        <ul class="shelf" id="cartoons-list"></ul>
+      </div>
+      <p class="catalog-note" id="catalog-note"></p>
     </section>
 
     <footer class="foot">

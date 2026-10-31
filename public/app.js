@@ -26,6 +26,8 @@
     stage: $('stage'), mode: $('mode'), getApp: $('get-app'),
     tc: $('tc'), tcPlay: $('tc-play'), tcTime: $('tc-time'), tcSeek: $('tc-seek'), tcDur: $('tc-dur'),
     tcAudio: $('tc-audio'), tcSubs: $('tc-subs'), tcMute: $('tc-mute'), tcFull: $('tc-full'),
+    viewPlayer: $('view-player'), viewCatalog: $('view-catalog'), catalogStatus: $('catalog-status'),
+    catalogNote: $('catalog-note'),
   };
 
   let config = { local: false, ffmpeg: false };
@@ -588,11 +590,99 @@
     if (current && Number.isInteger(f) && current.files[f] && f !== currentFile) play(f);
   }
 
+  // ---------- вкладки ----------
+  let catalogLoaded = false;
+
+  function showView(name) {
+    const isCatalog = name === 'catalog';
+    els.viewPlayer.hidden = isCatalog;
+    els.viewCatalog.hidden = !isCatalog;
+    document.querySelectorAll('.tab').forEach((t) => {
+      if (t.dataset.tab === name) t.setAttribute('aria-current', 'page');
+      else t.removeAttribute('aria-current');
+    });
+    if (isCatalog) {
+      history.replaceState(null, '', '#catalog');
+      if (!catalogLoaded) loadCatalog();
+    } else if (current && currentFile != null) {
+      updateUrl();
+    } else {
+      history.replaceState(null, '', location.pathname);
+    }
+    window.scrollTo({ top: 0 });
+  }
+
+  document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', (e) => {
+    e.preventDefault();
+    showView(t.dataset.tab);
+  }));
+
+  // ---------- каталог ----------
+  async function loadCatalog() {
+    els.catalogStatus.textContent = 'Загружаю список…';
+    els.catalogStatus.dataset.kind = 'wait';
+    try {
+      const res = await fetch('/api/catalog');
+      if (!res.ok) throw new Error();
+      const c = await res.json();
+      renderShelf('films', c.films || []);
+      renderShelf('cartoons', c.cartoons || []);
+      catalogLoaded = true;
+      els.catalogStatus.textContent = (c.films || []).length || (c.cartoons || []).length ? '' : 'Список пока пуст — сервер ещё собирает его. Загляните через пару минут.';
+      els.catalogStatus.dataset.kind = '';
+      const date = c.updatedAt ? new Date(c.updatedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) : null;
+      els.catalogNote.textContent = `Источник — Internet Archive (archive.org): фильмы до ${c.maxYear || 1950} года с отметкой «общественное достояние», по числу просмотров.` +
+        (date ? ` Обновлено ${date}.` : '') + ' Отметку ставит тот, кто загрузил фильм, поэтому в списке только старое кино, а копии с сомнительными отметками отсеяны.';
+    } catch {
+      els.catalogStatus.textContent = 'Не удалось загрузить каталог. Попробуйте обновить страницу.';
+      els.catalogStatus.dataset.kind = 'error';
+    }
+  }
+
+  function renderShelf(name, items) {
+    const box = $(`catalog-${name}`);
+    const list = $(`${name}-list`);
+    box.hidden = !items.length;
+    $(`${name}-count`).textContent = items.length ? String(items.length) : '';
+    list.replaceChildren();
+    for (const item of items) {
+      const li = el('li');
+      const card = el('button', 'card');
+      card.type = 'button';
+      const cover = el('span', 'card-cover');
+      const img = document.createElement('img');
+      img.src = `/cover/${encodeURIComponent(item.id)}`;
+      img.alt = '';
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.addEventListener('error', () => img.remove());
+      cover.append(img);
+      if (item.silent) cover.append(el('span', 'card-badge', 'Немое'));
+      const body = el('span', 'card-body');
+      // «1929: Arsenal with score…», «Aelita: Reina de Marte 1924 (Subtitulada…)» → «Arsenal», «Aelita».
+      const orig = item.title.replace(/^\d{4}:\s*/, '').split(/\s*[([:]|\s+with\s+(?:score|english|subtitles)\b|\s+-\s+/i)[0].replace(/\s+(19|20)\d\d$/, '').trim() || item.title;
+      const name = item.titleRu || orig;
+      body.append(el('span', 'card-title', name));
+      if (item.titleRu && orig.toLowerCase() !== name.toLowerCase()) body.append(el('span', 'card-orig', orig));
+      body.append(el('span', 'card-meta', [item.year, item.minutes && `${item.minutes} мин`].filter(Boolean).join(' · ')));
+      card.append(cover, body);
+      card.setAttribute('aria-label', `${item.titleRu || item.title}, ${item.year || ''} — смотреть`);
+      card.addEventListener('click', () => {
+        showView('player');
+        els.input.value = item.torrent;
+        open(item.torrent, false, item.torrent);
+      });
+      li.append(card);
+      list.append(li);
+    }
+  }
+
   async function init() {
     try { config = await (await fetch('/api/config')).json(); } catch { /* по умолчанию */ }
     els.getApp.hidden = Boolean(config.local);
     renderRecent();
-    fromHash();
+    if (location.hash === '#catalog') showView('catalog');
+    else fromHash();
   }
   init();
 })();
