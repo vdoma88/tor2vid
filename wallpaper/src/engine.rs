@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -40,6 +41,9 @@ struct Screen {
     host: Option<HWND>,
     player: Option<Player>,
     current: Option<Wallpaper>,
+    /// Запуск не удался (mpv или окно). Такой экран не перезапускается
+    /// каждую секунду — только при смене обоев, мониторов или проводника.
+    failed: bool,
 }
 
 pub struct ScreenStatus {
@@ -59,6 +63,8 @@ pub struct Engine {
     errors: Vec<String>,
     controller: Option<HWND>,
     dirty_layout: bool,
+    /// Слой не нашёлся — следующая попытка не раньше этого времени.
+    layer_retry_at: Option<Instant>,
 }
 
 thread_local! {
@@ -67,6 +73,7 @@ thread_local! {
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 const TIMER_ID: usize = 1;
+const LAYER_RETRY: Duration = Duration::from_secs(10);
 
 /// Выполняет `f` с движком. Из обработчиков окон — только если движок
 /// сейчас никем не занят (повторный вход пропускается).
@@ -87,6 +94,7 @@ pub fn init(opts: Options) {
                 monitor,
                 host: None,
                 player: None,
+                failed: false,
                 current: None,
             })
             .collect(),
@@ -98,6 +106,7 @@ pub fn init(opts: Options) {
         errors: Vec::new(),
         controller,
         dirty_layout: false,
+        layer_retry_at: None,
     };
     ENGINE.with(|cell| *cell.borrow_mut() = Some(engine));
 }
@@ -167,12 +176,21 @@ impl Engine {
         if let Some(l) = self.layer.filter(|l| l.is_alive()) {
             return Some(l);
         }
+        if self.layer_retry_at.is_some_and(|t| Instant::now() < t) {
+            return None;
+        }
         self.layer = desktop::find_layer();
-        if self.layer.is_none() {
-            self.errors.push(
-                "Не удалось найти слой рабочего стола. Перезапустите проводник или программу."
-                    .into(),
-            );
+        if self.layer.is_some() {
+            self.layer_retry_at = None;
+        } else {
+            // Сообщаем один раз за серию неудач, ищем не чаще раза в 10 с.
+            if self.layer_retry_at.is_none() {
+                self.errors.push(
+                    "Не удалось найти слой рабочего стола. Перезапустите проводник или программу."
+                        .into(),
+                );
+            }
+            self.layer_retry_at = Some(Instant::now() + LAYER_RETRY);
         }
         self.layer
     }
@@ -182,6 +200,8 @@ impl Engine {
         let indices: Vec<usize> = (0..self.screens.len())
             .filter(|&i| device.is_none_or(|d| self.screens[i].monitor.device == d))
             .collect();
+        // Действие пользователя — ищем слой сразу, без ожидания.
+        self.layer_retry_at = None;
         for i in indices {
             self.screens[i].current = wallpaper.clone();
             self.start_screen(i);
@@ -199,6 +219,7 @@ impl Engine {
 
     fn start_screen(&mut self, i: usize) {
         self.stop_screen(i);
+        self.screens[i].failed = false;
         let Some(wp) = self.screens[i].current.clone() else {
             return;
         };
@@ -206,6 +227,7 @@ impl Engine {
         let monitor = self.screens[i].monitor.clone();
         let Some(host) = desktop::create_host(layer, &monitor) else {
             self.errors.push("Не удалось создать окно обоев.".into());
+            self.screens[i].failed = true;
             return;
         };
         self.screens[i].host = Some(host);
@@ -214,6 +236,7 @@ impl Engine {
             Err(e) => {
                 self.errors.push(format!("mpv: {e}"));
                 self.stop_screen(i);
+                self.screens[i].failed = true;
             }
         }
     }
@@ -351,6 +374,7 @@ impl Engine {
                     monitor,
                     host: None,
                     player: None,
+                    failed: false,
                     current,
                 }
             })
@@ -388,6 +412,7 @@ impl Engine {
             .filter(|&i| {
                 let s = &self.screens[i];
                 s.current.is_some()
+                    && !s.failed
                     && match (s.host, self.layer) {
                         (Some(h), Some(l)) => !layer_ok || !desktop::host_alive(h, l),
                         _ => true,
@@ -427,6 +452,7 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
     if msg == WM_DISPLAYCHANGE || (taskbar != 0 && msg == taskbar) {
         with(|e| {
             e.layer = None;
+            e.layer_retry_at = None;
             e.dirty_layout = true;
         });
         return LRESULT(0);
