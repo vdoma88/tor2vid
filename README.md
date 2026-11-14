@@ -81,6 +81,12 @@ Internet Archive. `catalog.js` раз в сутки берёт из API архи
 https://github.com/vdoma88/tor2vid/releases/latest/download/tor2vid-windows-x64.zip
 — распаковать и запустить `tor2vid.bat`, браузер откроется сам.
 
+## Живые обои (Rust)
+
+Отдельное приложение в папке [`wallpaper/`](wallpaper/README.md): видео,
+анимация и звук на рабочем столе Windows, библиотека и свободные ролики с
+Викисклада. Релиз — `oboi-v<версия>`.
+
 ## Запуск из исходников
 
 ```bash
