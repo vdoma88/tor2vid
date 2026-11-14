@@ -1,0 +1,100 @@
+name: Живые обои для Windows
+
+# Отдельное приложение на Rust из папки wallpaper/. Релиз называется
+# oboi-v<версия из wallpaper/Cargo.toml> и не становится «последним»,
+# чтобы не перекрывать релиз tor2vid.
+on:
+  push:
+    paths:
+      - wallpaper/**
+      - .github/workflows/wallpaper.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: wallpaper
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Кэш cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            wallpaper/target
+          key: oboi-${{ hashFiles('wallpaper/Cargo.lock') }}
+
+      - name: libmpv (сборка shinchiro/mpv-winbuild-cmake)
+        run: |
+          set -e
+          mkdir -p ../mpv
+          gh release download -R shinchiro/mpv-winbuild-cmake --pattern 'mpv-dev-x86_64-2*.7z' -D ../mpv
+          cd ../mpv && 7z x -y mpv-dev-*.7z > /dev/null && ls
+
+      - name: Тесты (с настоящим libmpv)
+        run: |
+          export PATH="$(cd ../mpv && pwd -W):$PATH"
+          cargo test --release
+
+      - name: Сборка
+        run: cargo build --release
+
+      - name: Собрать папку
+        run: |
+          set -e
+          D=../dist/zhivye-oboi
+          mkdir -p "$D"
+          cp target/release/zhivye-oboi.exe "$D/"
+          cp ../mpv/libmpv-2.dll "$D/"
+          cp packaging/README.txt "$D/"
+
+      - name: Проверка — mpv, мониторы, слой рабочего стола
+        working-directory: dist/zhivye-oboi
+        run: |
+          set -e
+          ./zhivye-oboi.exe --diagnose ../diagnose.txt || { cat ../diagnose.txt; exit 1; }
+          cat ../diagnose.txt
+          grep -q '^mpv: mpv' ../diagnose.txt
+
+      - name: Проверка — окно запускается и не падает
+        working-directory: dist/zhivye-oboi
+        run: |
+          ./zhivye-oboi.exe &
+          sleep 10
+          tasklist //FI "IMAGENAME eq zhivye-oboi.exe" | tee ../tasks.txt
+          grep -qi zhivye-oboi ../tasks.txt
+          taskkill //F //IM zhivye-oboi.exe
+
+      - name: Архив
+        working-directory: dist
+        run: 7z a -tzip zhivye-oboi-windows-x64.zip zhivye-oboi > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zhivye-oboi-windows-x64
+          path: dist/zhivye-oboi-windows-x64.zip
+
+      - name: Релиз на GitHub
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          set -e
+          R="${{ github.repository }}"
+          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          TAG="oboi-v$V"
+          if gh release view "$TAG" -R "$R" > /dev/null 2>&1; then
+            gh release upload "$TAG" ../dist/zhivye-oboi-windows-x64.zip --clobber -R "$R"
+          else
+            gh release create "$TAG" ../dist/zhivye-oboi-windows-x64.zip -R "$R" --target "$GITHUB_SHA" --latest=false \
+              --title "Живые обои $V" \
+              --notes-file packaging/RELEASE.md
+          fi
