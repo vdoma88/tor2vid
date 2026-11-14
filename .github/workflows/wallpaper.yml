@@ -96,5 +96,5 @@ jobs:
           else
             gh release create "$TAG" ../dist/zhivye-oboi-windows-x64.zip -R "$R" --target "$GITHUB_SHA" --latest=false \
               --title "Живые обои $V" \
-              --notes "Видео, анимация и звук на рабочем столе Windows 10/11. Распакуйте архив и запустите zhivye-oboi.exe — mpv уже внутри."
+              --notes-file packaging/RELEASE.md
           fi
