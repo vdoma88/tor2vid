@@ -11,6 +11,7 @@ mod desktop;
 #[cfg(windows)]
 mod engine;
 mod library;
+mod log;
 mod mpv;
 mod online;
 #[cfg(windows)]
@@ -49,11 +50,24 @@ fn main() -> eframe::Result {
         });
     }
 
+    install_panic_hook();
+    log::write(&format!(
+        "запуск {} {:?}",
+        env!("CARGO_PKG_VERSION"),
+        &args[1..]
+    ));
+
     // Второй экземпляр не нужен: два набора окон за значками мешают друг
     // другу. Если программа уже запущена — показываем её окно.
     if system::signal_running_instance() {
+        log::write("уже запущена — показываем её окно");
         return Ok(());
     }
+
+    // Отрисовка: сначала wgpu (DirectX 12 / Vulkan). Если на этом компьютере
+    // он не поднимается, перезапускаемся с OpenGL (`--opengl`): второй цикл
+    // событий winit в том же процессе создать нельзя.
+    let opengl = args.iter().any(|a| a == "--opengl");
 
     let tray_start = std::env::args().any(|a| a == "--tray");
     let icon = egui::IconData {
@@ -68,7 +82,11 @@ fn main() -> eframe::Result {
             .with_min_inner_size([720.0, 520.0])
             .with_icon(icon)
             .with_visible(!tray_start),
-        renderer: eframe::Renderer::Wgpu,
+        renderer: if opengl {
+            eframe::Renderer::Glow
+        } else {
+            eframe::Renderer::Wgpu
+        },
         ..Default::default()
     };
     let result = eframe::run_native(
@@ -77,7 +95,44 @@ fn main() -> eframe::Result {
         Box::new(|cc| Ok(Box::new(ui::App::new(cc)))),
     );
     engine::shutdown();
+    if let Err(e) = &result {
+        let renderer = if opengl { "OpenGL" } else { "wgpu" };
+        log::write(&format!("окно не открылось ({renderer}): {e}"));
+        if !opengl {
+            if let Ok(exe) = std::env::current_exe() {
+                let mut child_args: Vec<String> = args[1..].to_vec();
+                child_args.push("--opengl".into());
+                if std::process::Command::new(exe)
+                    .args(&child_args)
+                    .spawn()
+                    .is_ok()
+                {
+                    log::write("перезапуск с OpenGL");
+                    return Ok(());
+                }
+            }
+        }
+        system::error_box(&format!(
+            "Не удалось открыть окно программы.\n\n{e}\n\n\
+             Обновите драйвер видеокарты. Подробности — в журнале:\n{}",
+            log::path().display()
+        ));
+    }
     result
+}
+
+/// Падение программы не должно быть молчаливым: пишем в журнал и
+/// показываем окно с текстом ошибки.
+#[cfg(windows)]
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        log::write(&format!("сбой: {info}\n{bt}"));
+        system::error_box(&format!(
+            "Программа столкнулась с ошибкой и будет закрыта.\n\n{info}\n\nЖурнал: {}",
+            log::path().display()
+        ));
+    }));
 }
 
 /// Проверяет mpv, мониторы и слой рабочего стола и на пару секунд
@@ -87,6 +142,10 @@ fn diagnose() -> String {
     use std::fmt::Write;
     let mut r = String::new();
     let _ = writeln!(r, "Живые обои {}", env!("CARGO_PKG_VERSION"));
+    let tail = log::tail(30);
+    if !tail.is_empty() {
+        let _ = writeln!(r, "--- журнал ---\n{tail}\n--------------");
+    }
     match mpv::Player::new(&[("vo", "null"), ("ao", "null"), ("config", "no")]) {
         Ok(p) => {
             let _ = writeln!(r, "mpv: {}", p.get("mpv-version").unwrap_or_default());

@@ -1,6 +1,6 @@
 [package]
 name = "zhivye-oboi"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Живые обои для Windows: видео, анимация и звук на рабочем столе"
 license = "ISC"
@@ -18,7 +18,7 @@ libloading = "0.9"
 dirs = "6"
 
 [target.'cfg(windows)'.dependencies]
-eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts"] }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "glow", "default_fonts"] }
 egui_extras = { version = "0.37", features = ["file", "image"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 raw-window-handle = "0.6"

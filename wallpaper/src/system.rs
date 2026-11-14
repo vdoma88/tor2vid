@@ -10,8 +10,8 @@ use windows::Win32::System::Registry::{
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, PostMessageW, SetForegroundWindow, ShowWindow, SW_HIDE, SW_RESTORE, SW_SHOWNORMAL,
-    WM_APP,
+    FindWindowW, MessageBoxW, SendMessageTimeoutW, SetForegroundWindow, ShowWindow, MB_ICONERROR,
+    MB_OK, SMTO_ABORTIFHUNG, SW_HIDE, SW_RESTORE, SW_SHOWNORMAL, WM_APP,
 };
 
 /// Сообщение управляющему окну: «покажи панель» (от второго запуска).
@@ -30,16 +30,38 @@ pub fn show_panel() {
     }
 }
 
-/// Программа уже запущена? Тогда просим её показать окно.
+/// Программа уже запущена? Тогда просим её показать окно. Если та копия
+/// не отвечает (зависла), запускаемся как обычно.
 pub fn signal_running_instance() -> bool {
     unsafe {
         match FindWindowW(CONTROLLER_CLASS, PCWSTR::null()) {
             Ok(h) if !h.is_invalid() => {
-                let _ = PostMessageW(Some(h), WM_SHOW_PANEL, WPARAM(0), LPARAM(0));
-                true
+                let mut result = 0usize;
+                SendMessageTimeoutW(
+                    h,
+                    WM_SHOW_PANEL,
+                    WPARAM(0),
+                    LPARAM(0),
+                    SMTO_ABORTIFHUNG,
+                    3000,
+                    Some(&mut result),
+                )
+                .0 != 0
             }
             _ => false,
         }
+    }
+}
+
+/// Окно с ошибкой — у программы нет консоли, иначе сбой был бы немым.
+pub fn error_box(text: &str) {
+    unsafe {
+        MessageBoxW(
+            None,
+            &HSTRING::from(text),
+            &HSTRING::from("Живые обои"),
+            MB_OK | MB_ICONERROR,
+        );
     }
 }
 
