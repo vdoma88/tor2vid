@@ -27,6 +27,22 @@ pub const PAGE: u32 = 24;
 pub enum Fetch {
     Direct(String),
     NasaCollection(String),
+    /// Альбом нетлейбла в Internet Archive: идентификатор записи.
+    ArchiveAlbum(String),
+}
+
+/// Один файл к скачиванию: ссылка, название и размер (0 — неизвестен).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Track {
+    pub url: String,
+    pub title: String,
+    pub size: u64,
+}
+
+/// Скачанное: файлы с названиями и общее превью.
+pub struct Downloaded {
+    pub files: Vec<(PathBuf, String)>,
+    pub thumb: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +61,8 @@ pub struct Remote {
     pub duration: f64,
     pub author: String,
     pub license: String,
+    /// Популярность: скачивания (у нетлейблов), 0 — неизвестно.
+    pub plays: u64,
 }
 
 pub struct SearchResult {
@@ -89,6 +107,27 @@ pub struct Query {
     pub short_loops: bool,
     pub page: u32,
     pub key: String,
+    pub sort: Sort,
+    /// Только «выбор редакции» (Pixabay).
+    pub editors_choice: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sort {
+    /// Самое популярное — тренды.
+    Popular,
+    /// Самое новое.
+    Latest,
+}
+
+impl Sort {
+    pub const ALL: [Sort; 2] = [Sort::Popular, Sort::Latest];
+    pub fn label(self) -> &'static str {
+        match self {
+            Sort::Popular => "В тренде",
+            Sort::Latest => "Новое",
+        }
+    }
 }
 
 pub fn agent() -> ureq::Agent {
@@ -211,7 +250,7 @@ pub struct Download {
     pub done: Arc<AtomicU64>,
     pub total: Arc<AtomicU64>,
     pub cancel: Arc<AtomicBool>,
-    pub result: Receiver<Result<(PathBuf, Option<PathBuf>), String>>,
+    pub result: Receiver<Result<Downloaded, String>>,
 }
 
 impl Download {
@@ -259,16 +298,34 @@ pub fn spawn_download(
     let (tx, result) = channel();
     let (d, t, c, r) = (done.clone(), total.clone(), cancel.clone(), remote.clone());
     std::thread::spawn(move || {
-        let res = sources::resolve(&r, quality).and_then(|url| {
-            let target = unique_path(&media, &file_name(&r.title, &url));
-            fetch(&url, &target, &d, &t, &c).map(|_| {
-                let thumb = r.thumb.as_ref().and_then(|url| {
-                    let path = thumbs.join(format!("{id}.jpg"));
-                    let (a, b, n) = (AtomicU64::new(0), AtomicU64::new(0), AtomicBool::new(false));
-                    fetch(url, &path, &a, &b, &n).ok().map(|_| path)
-                });
-                (target, thumb)
-            })
+        let res = sources::resolve(&r, quality).and_then(|tracks| {
+            let known: u64 = tracks.iter().map(|x| x.size).sum();
+            if known > 0 {
+                t.store(known, Ordering::Relaxed);
+            }
+            // Альбом — в свою папку, одиночный файл — прямо в media.
+            let dir = if tracks.len() > 1 {
+                let dir = unique_path(&media, &safe_file_name(&r.title));
+                fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                dir
+            } else {
+                media.clone()
+            };
+            let mut files = Vec::new();
+            for tr in &tracks {
+                let target = unique_path(&dir, &file_name(&tr.title, &tr.url));
+                // У одиночного файла размер берётся из ответа сервера.
+                let total_probe = AtomicU64::new(0);
+                let total = if tracks.len() > 1 { &total_probe } else { &*t };
+                fetch(&tr.url, &target, &d, total, &c)?;
+                files.push((target, tr.title.clone()));
+            }
+            let thumb = r.thumb.as_ref().and_then(|url| {
+                let path = thumbs.join(format!("{id}.jpg"));
+                let (a, b, n) = (AtomicU64::new(0), AtomicU64::new(0), AtomicBool::new(false));
+                fetch(url, &path, &a, &b, &n).ok().map(|_| path)
+            });
+            Ok(Downloaded { files, thumb })
         });
         let _ = tx.send(res);
         wake();
@@ -366,6 +423,17 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
+/// 992546 → «993 тыс.», 1500000 → «1,5 млн».
+pub fn human_count(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1} млн", n as f64 / 1e6).replace('.', ",")
+    } else if n >= 1000 {
+        format!("{} тыс.", (n + 500) / 1000)
+    } else {
+        n.to_string()
+    }
+}
+
 pub fn human_duration(sec: f64) -> String {
     let s = sec.round() as u64;
     if s >= 3600 {
@@ -419,6 +487,13 @@ mod tests {
             "https://x/a%20b?q=1&w=2"
         );
         assert_eq!(encode_url("https://x/ё"), "https://x/%D1%91");
+    }
+
+    #[test]
+    fn counts_for_humans() {
+        assert_eq!(human_count(992_546), "993 тыс.");
+        assert_eq!(human_count(1_500_000), "1,5 млн");
+        assert_eq!(human_count(42), "42");
     }
 
     #[test]

@@ -116,6 +116,7 @@ fn video(v: &Value, quality: Quality) -> Option<Remote> {
         duration: f64_of(v, "duration"),
         author: str_of(&user, "name").to_string(),
         license: LICENSE.into(),
+        plays: 0,
     })
 }
 
@@ -153,6 +154,7 @@ fn photo(p: &Value, quality: Quality) -> Option<Remote> {
         duration: 0.0,
         author: str_of(p, "photographer").to_string(),
         license: LICENSE.into(),
+        plays: 0,
     })
 }
 

@@ -17,7 +17,7 @@ use windows::Win32::Foundation::HWND;
 
 use crate::engine::{self, Options, ScreenStatus, Wallpaper};
 use crate::library::{self, Fit, Item, Kind, Library, Paths, Settings, Source};
-use crate::online::{self, Download, Quality, Query, Remote, SearchResult};
+use crate::online::{self, Download, Quality, Query, Remote, SearchResult, Sort};
 use crate::sources::{Site, VIBES};
 use crate::system::{self, Panel};
 use crate::theme::{self, *};
@@ -43,6 +43,8 @@ struct OnlineState {
     kind: Kind,
     quality: Quality,
     short_loops: bool,
+    sort: Sort,
+    editors_choice: bool,
     /// Поле ввода ключа API для выбранного источника.
     key_input: String,
     results: Vec<Remote>,
@@ -135,6 +137,8 @@ impl App {
                 kind: Kind::Video,
                 quality: Quality::FullHd,
                 short_loops: false,
+                sort: Sort::Popular,
+                editors_choice: false,
                 key_input: String::new(),
                 results: Vec::new(),
                 next: None,
@@ -359,32 +363,63 @@ impl App {
         });
         for (remote, res) in finished {
             match res {
-                Ok((file, thumb)) => {
-                    let id = library::new_id();
-                    self.lib.push(Item {
-                        id: id.clone(),
-                        title: remote.title.clone(),
-                        kind: remote.kind,
-                        file: file.clone(),
-                        thumb: thumb.clone(),
-                        source: Some(Source {
-                            site: remote.site.label().into(),
-                            page: remote.page.clone(),
-                            author: remote.author.clone(),
-                            license: remote.license.clone(),
-                        }),
-                        owned: true,
-                        added: library::now(),
-                    });
-                    self.lib.save();
-                    if thumb.is_none() && remote.kind != Kind::Audio {
-                        self.thumbs.request(thumbs::Job {
-                            id,
-                            file,
-                            kind: remote.kind,
+                Ok(done) => {
+                    let album = done.files.len() > 1;
+                    let mut ids = Vec::new();
+                    for (n, (file, title)) in done.files.into_iter().enumerate() {
+                        let id = library::new_id() + &n.to_string();
+                        // У каждого трека своя копия обложки: удаление одного
+                        // не должно оставить остальные без превью.
+                        let thumb = done.thumb.as_ref().and_then(|t| {
+                            let own = self.paths.thumbs.join(format!("{id}.jpg"));
+                            std::fs::copy(t, &own).ok().map(|_| own)
                         });
+                        self.lib.push(Item {
+                            id: id.clone(),
+                            title: if album { title } else { remote.title.clone() },
+                            kind: remote.kind,
+                            file: file.clone(),
+                            thumb: thumb.clone(),
+                            source: Some(Source {
+                                site: remote.site.label().into(),
+                                page: remote.page.clone(),
+                                author: remote.author.clone(),
+                                license: remote.license.clone(),
+                            }),
+                            owned: true,
+                            added: library::now(),
+                        });
+                        if thumb.is_none() && remote.kind != Kind::Audio {
+                            self.thumbs.request(thumbs::Job {
+                                id: id.clone(),
+                                file,
+                                kind: remote.kind,
+                            });
+                        }
+                        ids.push(id);
                     }
-                    self.notify(format!("Скачано в библиотеку: {}", remote.title));
+                    if let Some(t) = done.thumb {
+                        let _ = std::fs::remove_file(t);
+                    }
+                    self.lib.save();
+                    if remote.kind == Kind::Audio {
+                        // Музыка сразу встаёт в фон — для этого её и качали.
+                        for id in &ids {
+                            if !self.settings.music.contains(id) {
+                                self.settings.music.push(id.clone());
+                            }
+                        }
+                        self.settings.music_on = true;
+                        self.save_settings();
+                        self.restart_music();
+                        self.notify(format!(
+                            "«{}» — {} трек(ов) в библиотеке и уже играет фоном",
+                            remote.title,
+                            ids.len()
+                        ));
+                    } else {
+                        self.notify(format!("Скачано в библиотеку: {}", remote.title));
+                    }
                 }
                 Err(e) if e == "Отменено" => {}
                 Err(e) => self.notify_error(format!("{}: {e}", remote.title)),
@@ -426,6 +461,8 @@ impl App {
             short_loops: o.short_loops,
             page,
             key: self.key_for(o.site),
+            sort: o.sort,
+            editors_choice: o.editors_choice,
         };
         let wake = ctx.clone();
         self.online.append = append;
@@ -1155,6 +1192,15 @@ impl App {
         // Вайбы — готовые подборки.
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Вайб:").color(INK_TERTIARY));
+            let trends = self.online.query.is_empty() && self.online.sort == Sort::Popular;
+            if chip(ui, trends && self.online.searched, "В тренде")
+                .on_hover_text("Самое популярное у источника прямо сейчас")
+                .clicked()
+            {
+                self.online.query.clear();
+                self.online.sort = Sort::Popular;
+                go = true;
+            }
             for (label, query) in VIBES {
                 let selected = self.online.query == query;
                 if chip(ui, selected, label).clicked() {
@@ -1181,6 +1227,27 @@ impl App {
                         self.online.quality = qv;
                         go = self.online.searched;
                     }
+                }
+            }
+            if site.has_sort() {
+                ui.add_space(12.0);
+                for sv in Sort::ALL {
+                    if chip(ui, self.online.sort == sv, sv.label()).clicked()
+                        && self.online.sort != sv
+                    {
+                        self.online.sort = sv;
+                        go = self.online.searched;
+                    }
+                }
+            }
+            if site == Site::Pixabay {
+                ui.add_space(12.0);
+                if ui
+                    .checkbox(&mut self.online.editors_choice, "Выбор редакции")
+                    .on_hover_text("Только ролики, отобранные редакцией Pixabay")
+                    .changed()
+                {
+                    go = self.online.searched;
                 }
             }
             if matches!(self.online.kind, Kind::Video | Kind::Animation) {
@@ -1273,6 +1340,9 @@ impl App {
                         if r.size > 0 {
                             meta.push(online::human_size(r.size));
                         }
+                        if r.plays > 0 {
+                            meta.push(format!("{} скачиваний", online::human_count(r.plays)));
+                        }
                         ui.label(RichText::new(meta.join(" · ")).size(12.0).color(INK_SUBTLE));
                         let credit = [r.license.as_str(), r.author.as_str()]
                             .iter()
@@ -1301,7 +1371,16 @@ impl App {
                                 }
                             } else if in_library.contains(&r.page) {
                                 badge(ui, "в библиотеке", Some(SUCCESS));
-                            } else if primary_button(ui, "Скачать").clicked() {
+                            } else if primary_button(
+                                ui,
+                                if matches!(r.fetch, online::Fetch::ArchiveAlbum(_)) {
+                                    "Скачать альбом"
+                                } else {
+                                    "Скачать"
+                                },
+                            )
+                            .clicked()
+                            {
                                 download = Some(r.clone());
                             }
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

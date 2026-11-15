@@ -4,12 +4,13 @@
 
 mod commons;
 mod nasa;
+mod netlabels;
 mod openverse;
 mod pexels;
 mod pixabay;
 
 use crate::library::Kind;
-use crate::online::{Fetch, Quality, Query, Remote, SearchResult};
+use crate::online::{Fetch, Quality, Query, Remote, SearchResult, Track};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Site {
@@ -18,13 +19,15 @@ pub enum Site {
     Nasa,
     Openverse,
     Commons,
+    Netlabels,
 }
 
 impl Site {
     /// Порядок в программе. Pixabay — первым: его ключ выдаётся сразу.
     /// Pexels — последним: выдачу новых ключей он приостановил.
-    pub const ALL: [Site; 5] = [
+    pub const ALL: [Site; 6] = [
         Site::Pixabay,
+        Site::Netlabels,
         Site::Nasa,
         Site::Openverse,
         Site::Commons,
@@ -38,6 +41,7 @@ impl Site {
             Site::Nasa => "NASA",
             Site::Openverse => "Openverse",
             Site::Commons => "Викисклад",
+            Site::Netlabels => "Нетлейблы",
         }
     }
 
@@ -45,10 +49,11 @@ impl Site {
     pub fn tagline(self) -> &'static str {
         match self {
             Site::Pexels => "Эстетичные видео в 4K: неон, города ночью, лоу-фай. Лицензия Pexels — бесплатно. Новые ключи Pexels сейчас не выдаёт — подойдёт, если ключ у вас уже есть.",
-            Site::Pixabay => "Видео в 4K и анимации-петли: неон, абстракции, частицы, ретровейв, природа. Лицензия Pixabay — бесплатно.",
+            Site::Pixabay => "Видео в 4K и анимации-петли: неон, аниме-эстетика, ретровейв, ночная езда. Лицензия Pixabay — бесплатно. Ролики без звука — музыку берите в «Нетлейблах».",
             Site::Nasa => "Космос от NASA: туманности, Земля с орбиты, полярные сияния. Общественное достояние.",
             Site::Openverse => "Картинки и музыка под Creative Commons: фото, арт, эмбиент и лоу-фай для фона.",
             Site::Commons => "Викисклад: видео, GIF, картинки и звук под свободными лицензиями.",
+            Site::Netlabels => "Музыка для фона: лоу-фай, хип-хоп биты, электросвинг, чиллвейв с независимых лейблов (Internet Archive). Альбом целиком, лицензии Creative Commons.",
         }
     }
 
@@ -59,6 +64,7 @@ impl Site {
             Site::Nasa => &[Kind::Video, Kind::Image],
             Site::Openverse => &[Kind::Image, Kind::Audio],
             Site::Commons => &[Kind::Video, Kind::Animation, Kind::Image, Kind::Audio],
+            Site::Netlabels => &[Kind::Audio],
         }
     }
 
@@ -91,19 +97,32 @@ impl Site {
 
     /// Учитывает ли источник фильтр качества.
     pub fn has_quality(self) -> bool {
-        !matches!(self, Site::Nasa)
+        !matches!(self, Site::Nasa | Site::Netlabels)
+    }
+
+    /// Умеет ли источник сортировать: тренды или новое.
+    pub fn has_sort(self) -> bool {
+        matches!(self, Site::Pixabay | Site::Netlabels)
     }
 }
 
 /// Вайбы — готовые подборки для быстрого старта. Запросы на английском:
 /// так их понимают все источники.
-pub const VIBES: [(&str, &str); 12] = [
+pub const VIBES: [(&str, &str); 20] = [
     ("Неон", "neon city night"),
     ("Лоу-фай", "lofi aesthetic"),
-    ("Космос", "galaxy nebula"),
+    ("Аниме", "anime"),
+    ("Вейпорвейв", "vaporwave"),
     ("Киберпанк", "cyberpunk"),
     ("Ретровейв", "synthwave retro"),
+    ("Ночная езда", "night drive car"),
+    ("Геймерский", "rgb gaming"),
+    ("Глитч", "glitch"),
+    ("Y2K", "y2k"),
     ("Токио", "tokyo night"),
+    ("Сакура", "sakura"),
+    ("Закат", "sunset aesthetic"),
+    ("Космос", "galaxy nebula"),
     ("Дождь", "rain window"),
     ("Океан", "ocean waves"),
     ("Огонь", "fire"),
@@ -119,14 +138,24 @@ pub fn search(q: &Query) -> Result<SearchResult, String> {
         Site::Nasa => nasa::search(q),
         Site::Openverse => openverse::search(q),
         Site::Commons => commons::search(q),
+        Site::Netlabels => netlabels::search(q),
     }
 }
 
-/// Ссылка на сам файл — для NASA её выбирают из списка файлов записи.
-pub fn resolve(r: &Remote, quality: Quality) -> Result<String, String> {
+/// Что скачивать: один файл или (альбом нетлейбла) все его треки. Для
+/// NASA ссылку выбирают из списка файлов записи.
+pub fn resolve(r: &Remote, quality: Quality) -> Result<Vec<Track>, String> {
+    let single = |url: String| {
+        vec![Track {
+            url,
+            title: r.title.clone(),
+            size: r.size,
+        }]
+    };
     match &r.fetch {
-        Fetch::Direct(url) => Ok(url.clone()),
-        Fetch::NasaCollection(url) => nasa::resolve(url, r.kind, quality),
+        Fetch::Direct(url) => Ok(single(url.clone())),
+        Fetch::NasaCollection(url) => nasa::resolve(url, r.kind, quality).map(single),
+        Fetch::ArchiveAlbum(id) => netlabels::tracks(id),
     }
 }
 
@@ -191,6 +220,8 @@ mod live {
             short_loops: false,
             page: 1,
             key: String::new(),
+            sort: crate::online::Sort::Popular,
+            editors_choice: false,
         }
     }
 
@@ -201,14 +232,29 @@ mod live {
         }
         let nasa = crate::online::search(&query(Site::Nasa, Kind::Video, "aurora")).unwrap();
         assert!(!nasa.items.is_empty());
-        let url = resolve(&nasa.items[0], Quality::FullHd).unwrap();
+        let url = resolve(&nasa.items[0], Quality::FullHd)
+            .unwrap()
+            .remove(0)
+            .url;
         eprintln!("NASA: {} → {url}", nasa.items[0].title);
         assert!(url.starts_with("https://") && url.ends_with(".mp4"));
         let img = crate::online::search(&query(Site::Nasa, Kind::Image, "nebula")).unwrap();
         eprintln!(
             "NASA img: {}",
-            resolve(&img.items[0], Quality::FullHd).unwrap()
+            resolve(&img.items[0], Quality::FullHd).unwrap()[0].url
         );
+        let nl = crate::online::search(&query(Site::Netlabels, Kind::Audio, "lofi")).unwrap();
+        assert!(!nl.items.is_empty());
+        let tr = resolve(&nl.items[0], Quality::Any).unwrap();
+        eprintln!(
+            "Нетлейблы: {} — {} ({} треков) → {}",
+            nl.items[0].author,
+            nl.items[0].title,
+            tr.len(),
+            tr[0].url
+        );
+        let px = crate::online::search(&query(Site::Pixabay, Kind::Video, ""));
+        assert!(px.is_err(), "без ключа Pixabay не ищет");
         // Openverse за Cloudflare: с облачных адресов часто отвечает 401 —
         // это не ошибка программы, поэтому только печатаем.
         match crate::online::search(&query(Site::Openverse, Kind::Image, "neon city")) {
