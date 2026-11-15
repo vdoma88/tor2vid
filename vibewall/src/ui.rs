@@ -1102,10 +1102,15 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.online.key_input)
-                            .hint_text("Ключ API")
+                            .hint_text("Ключ API (Ctrl+V)")
                             .desired_width(320.0)
                             .margin(Margin::symmetric(12, 8)),
                     );
+                    if secondary_button(ui, "Вставить").clicked() {
+                        if let Some(t) = system::clipboard_text() {
+                            self.online.key_input = t;
+                        }
+                    }
                     if primary_button(ui, "Сохранить").clicked()
                         && !self.online.key_input.trim().is_empty()
                     {
@@ -1410,11 +1415,16 @@ impl App {
                         ui.add_sized([90.0, 20.0], egui::Label::new(site.label()));
                         ui.add(
                             egui::TextEdit::singleline(key)
-                                .hint_text("Ключ API")
+                                .hint_text("Ключ API (Ctrl+V)")
                                 .password(true)
                                 .desired_width(320.0)
                                 .margin(Margin::symmetric(12, 8)),
                         );
+                        if ui.small_button("Вставить").clicked() {
+                            if let Some(t) = system::clipboard_text() {
+                                *key = t;
+                            }
+                        }
                         if !site.keys_paused() && ui.link("Получить ключ").clicked() {
                             system::open(site.key_url());
                         }

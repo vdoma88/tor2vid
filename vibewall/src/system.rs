@@ -134,3 +134,13 @@ impl Panel {
         }
     }
 }
+
+/// Текст из буфера обмена — для кнопки «Вставить» у полей ключей.
+pub fn clipboard_text() -> Option<String> {
+    arboard::Clipboard::new()
+        .ok()?
+        .get_text()
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
