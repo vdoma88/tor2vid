@@ -17,12 +17,14 @@ use windows::Win32::Foundation::HWND;
 
 use crate::engine::{self, Options, ScreenStatus, Wallpaper};
 use crate::library::{self, Fit, Item, Kind, Library, Paths, Settings, Source};
-use crate::online::{self, Download, Remote, SearchResult};
+use crate::online::{self, Download, Quality, Query, Remote, SearchResult};
+use crate::sources::{Site, VIBES};
 use crate::system::{self, Panel};
 use crate::theme::{self, *};
 use crate::thumbs::{self, Thumbnailer};
 
-pub const TITLE: &str = "Живые обои";
+pub const TITLE: &str = "Vibewall";
+const RELEASES_URL: &str = "https://github.com/vdoma88/tor2vid/releases";
 
 /// Первый кадр нарисован — окно точно на экране (для сторожа в main.rs).
 pub static FIRST_FRAME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -36,9 +38,13 @@ enum Tab {
 }
 
 struct OnlineState {
+    site: Site,
     query: String,
     kind: Kind,
-    hd: bool,
+    quality: Quality,
+    short_loops: bool,
+    /// Поле ввода ключа API для выбранного источника.
+    key_input: String,
     results: Vec<Remote>,
     next: Option<u32>,
     pending: Option<Receiver<Result<SearchResult, String>>>,
@@ -95,6 +101,13 @@ impl App {
         let lib = Library::load(&paths);
         let settings = library::load_settings(&paths);
         let mpv_error = crate::mpv::available().err();
+        // Обновляем путь автозапуска: программу могли переместить или
+        // переименовать (zhivye-oboi.exe → vibewall.exe).
+        if settings.autostart {
+            if let Err(e) = system::set_autostart(true) {
+                crate::log::write(&format!("автозапуск: {e}"));
+            }
+        }
 
         let panel = panel_hwnd(cc).map(Panel);
         if let Some(p) = panel {
@@ -117,9 +130,12 @@ impl App {
             lib_search: String::new(),
             thumbs,
             online: OnlineState {
+                site: Site::Pexels,
                 query: String::new(),
                 kind: Kind::Video,
-                hd: true,
+                quality: Quality::FullHd,
+                short_loops: false,
+                key_input: String::new(),
                 results: Vec::new(),
                 next: None,
                 pending: None,
@@ -352,7 +368,7 @@ impl App {
                         file: file.clone(),
                         thumb: thumb.clone(),
                         source: Some(Source {
-                            site: "Викисклад".into(),
+                            site: remote.site.label().into(),
                             page: remote.page.clone(),
                             author: remote.author.clone(),
                             license: remote.license.clone(),
@@ -394,21 +410,55 @@ impl App {
     }
 
     fn start_search(&mut self, ctx: &egui::Context, append: bool) {
-        let offset = if append {
-            self.online.next.unwrap_or(0)
+        let o = &self.online;
+        // Викисклад считает смещением с нуля, остальные — страницами с единицы.
+        let first = if o.site == Site::Commons { 0 } else { 1 };
+        let page = if append {
+            o.next.unwrap_or(first)
         } else {
-            0
+            first
+        };
+        let q = Query {
+            site: o.site,
+            kind: o.kind,
+            text: o.query.clone(),
+            quality: o.quality,
+            short_loops: o.short_loops,
+            page,
+            key: self.key_for(o.site),
         };
         let wake = ctx.clone();
         self.online.append = append;
         self.online.searched = true;
-        self.online.pending = Some(online::spawn_search(
-            self.online.query.clone(),
-            self.online.kind,
-            self.online.hd,
-            offset,
-            move || wake.request_repaint(),
-        ));
+        self.online.error = None;
+        if !append {
+            self.online.results.clear();
+            self.online.next = None;
+        }
+        self.online.pending = Some(online::spawn_search(q, move || wake.request_repaint()));
+    }
+
+    /// Ключ API источника: свой из настроек, иначе вшитый при сборке.
+    fn key_for(&self, site: Site) -> String {
+        let own = match site {
+            Site::Pexels => self.settings.pexels_key.trim(),
+            Site::Pixabay => self.settings.pixabay_key.trim(),
+            _ => "",
+        };
+        if own.is_empty() {
+            site.builtin_key().to_string()
+        } else {
+            own.to_string()
+        }
+    }
+
+    fn set_key(&mut self, site: Site, key: String) {
+        match site {
+            Site::Pexels => self.settings.pexels_key = key,
+            Site::Pixabay => self.settings.pixabay_key = key,
+            _ => return,
+        }
+        self.save_settings();
     }
 
     fn start_download(&mut self, ctx: &egui::Context, remote: Remote) {
@@ -416,6 +466,7 @@ impl App {
         let id = library::new_id();
         self.online.downloads.push(online::spawn_download(
             remote,
+            self.online.quality,
             self.paths.media.clone(),
             self.paths.thumbs.clone(),
             id,
@@ -520,18 +571,41 @@ fn preview(ui: &mut Ui, width: f32, src: Option<String>, kind: Kind) {
             ui.put(rect, img);
         }
         None => {
-            let label = match kind {
-                Kind::Audio => "♪",
-                Kind::Image => "▣",
-                _ => "▶",
-            };
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                label,
-                egui::FontId::proportional(32.0),
-                INK_TERTIARY,
-            );
+            // Значок рисуется фигурами: символов ▶ ♪ нет во всех шрифтах.
+            let c = rect.center();
+            let p = ui.painter();
+            let stroke = Stroke::new(2.0, INK_TERTIARY);
+            match kind {
+                Kind::Audio => {
+                    for (i, h) in [10.0, 22.0, 32.0, 18.0, 8.0].iter().enumerate() {
+                        let x = c.x - 20.0 + i as f32 * 10.0;
+                        p.line_segment(
+                            [egui::pos2(x, c.y - h / 2.0), egui::pos2(x, c.y + h / 2.0)],
+                            Stroke::new(4.0, INK_TERTIARY),
+                        );
+                    }
+                }
+                Kind::Image => {
+                    let r = egui::Rect::from_center_size(c, Vec2::new(40.0, 30.0));
+                    p.rect_stroke(r, CornerRadius::same(4), stroke, egui::StrokeKind::Inside);
+                    p.circle_filled(
+                        egui::pos2(r.left() + 10.0, r.top() + 9.0),
+                        3.0,
+                        INK_TERTIARY,
+                    );
+                }
+                _ => {
+                    p.add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(c.x - 9.0, c.y - 13.0),
+                            egui::pos2(c.x + 13.0, c.y),
+                            egui::pos2(c.x - 9.0, c.y + 13.0),
+                        ],
+                        INK_TERTIARY,
+                        Stroke::NONE,
+                    ));
+                }
+            }
         }
     }
 }
@@ -674,19 +748,13 @@ impl eframe::App for App {
 impl App {
     fn top_bar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::hover());
-            ui.painter()
-                .rect_filled(rect, CornerRadius::same(6), PRIMARY);
-            let c = rect.center();
-            ui.painter().add(egui::Shape::convex_polygon(
-                vec![
-                    egui::pos2(c.x - 3.5, c.y - 5.5),
-                    egui::pos2(c.x + 5.5, c.y),
-                    egui::pos2(c.x - 3.5, c.y + 5.5),
-                ],
-                Color32::WHITE,
-                Stroke::NONE,
-            ));
+            ui.add(
+                egui::Image::from_bytes(
+                    "bytes://vibewall-icon.png",
+                    include_bytes!("../assets/icon-256.png"),
+                )
+                .fit_to_exact_size(Vec2::splat(24.0)),
+            );
             ui.label(RichText::new(TITLE).font(semibold(16.0)).color(INK));
             ui.add_space(24.0);
             for (tab, name) in [
@@ -982,18 +1050,81 @@ impl App {
         );
         ui.label(
             RichText::new(
-                "Поиск по Викискладу (Wikimedia Commons): только свободные лицензии — CC0, CC BY, CC BY-SA и общественное достояние. \
-                 Автор и лицензия сохраняются в библиотеке; если показываете обои другим, указывайте автора.",
+                "Залипательные обои из открытых источников. У каждого файла есть лицензия, \
+                 автор сохраняется в библиотеке.",
             )
             .color(INK_SUBTLE),
         );
         ui.add_space(8.0);
 
         let mut go = false;
+
+        // Источник.
+        ui.horizontal_wrapped(|ui| {
+            for site in Site::ALL {
+                if chip(ui, self.online.site == site, site.label()).clicked()
+                    && self.online.site != site
+                {
+                    self.online.site = site;
+                    self.online.key_input.clear();
+                    if !site.kinds().contains(&self.online.kind) {
+                        self.online.kind = site.kinds()[0];
+                    }
+                    go = self.online.searched;
+                }
+            }
+        });
+        let site = self.online.site;
+        ui.label(RichText::new(site.tagline()).size(13.0).color(INK_TERTIARY));
+        ui.add_space(4.0);
+
+        let has_key = !site.needs_key() || !self.key_for(site).is_empty();
+        if !has_key {
+            let mut save = None;
+            card_frame().inner_margin(Margin::same(16)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    RichText::new(format!("Нужен бесплатный ключ {}", site.label()))
+                        .font(semibold(15.0))
+                        .color(INK),
+                );
+                ui.label(
+                    RichText::new(
+                        "Минута: зарегистрируйтесь, скопируйте ключ API и вставьте сюда. \
+                         Ключ хранится только на этом компьютере.",
+                    )
+                    .color(INK_SUBTLE),
+                );
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.online.key_input)
+                            .hint_text("Ключ API")
+                            .desired_width(320.0)
+                            .margin(Margin::symmetric(12, 8)),
+                    );
+                    if primary_button(ui, "Сохранить").clicked()
+                        && !self.online.key_input.trim().is_empty()
+                    {
+                        save = Some(self.online.key_input.trim().to_string());
+                    }
+                    if ui.link("Получить ключ").clicked() {
+                        system::open(site.key_url());
+                    }
+                });
+            });
+            if let Some(k) = save {
+                self.set_key(site, k);
+                self.online.key_input.clear();
+                go = true;
+            }
+            ui.add_space(8.0);
+        }
+
+        // Строка поиска.
         ui.horizontal(|ui| {
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.online.query)
-                    .hint_text("Например: ocean, rain, space, fire, forest")
+                    .hint_text("Что ищем? Например: neon, lofi, tokyo night")
                     .desired_width(360.0)
                     .margin(Margin::symmetric(12, 8)),
             );
@@ -1003,37 +1134,52 @@ impl App {
             if primary_button(ui, "Найти").clicked() {
                 go = true;
             }
-            ui.checkbox(&mut self.online.hd, "Только HD")
-                .on_hover_text("Ширина от 1280 точек (для звука не действует)");
         });
+
+        // Вайбы — готовые подборки.
         ui.horizontal_wrapped(|ui| {
-            for k in Kind::ALL {
-                if chip(ui, self.online.kind == k, k.label()).clicked() && self.online.kind != k {
-                    self.online.kind = k;
-                    if self.online.searched {
-                        go = true;
-                    }
-                }
-            }
-            ui.add_space(12.0);
-            ui.label(RichText::new("Идеи:").color(INK_TERTIARY));
-            for idea in [
-                "ocean",
-                "rain",
-                "clouds timelapse",
-                "fire",
-                "aurora",
-                "forest",
-                "space",
-                "snow",
-            ] {
-                if ui.link(RichText::new(idea).size(13.0)).clicked() {
-                    self.online.query = idea.into();
+            ui.label(RichText::new("Вайб:").color(INK_TERTIARY));
+            for (label, query) in VIBES {
+                let selected = self.online.query == query;
+                if chip(ui, selected, label).clicked() {
+                    self.online.query = query.into();
                     go = true;
                 }
             }
         });
-        if go && self.online.pending.is_none() {
+
+        // Фильтры.
+        ui.horizontal_wrapped(|ui| {
+            for &k in site.kinds() {
+                if chip(ui, self.online.kind == k, k.label()).clicked() && self.online.kind != k {
+                    self.online.kind = k;
+                    go = self.online.searched;
+                }
+            }
+            if site.has_quality() && self.online.kind != Kind::Audio {
+                ui.add_space(12.0);
+                for qv in Quality::ALL {
+                    if chip(ui, self.online.quality == qv, qv.label()).clicked()
+                        && self.online.quality != qv
+                    {
+                        self.online.quality = qv;
+                        go = self.online.searched;
+                    }
+                }
+            }
+            if matches!(self.online.kind, Kind::Video | Kind::Animation) {
+                ui.add_space(12.0);
+                if ui
+                    .checkbox(&mut self.online.short_loops, "Короткие петли")
+                    .on_hover_text("Только ролики до 30 секунд — они незаметно зацикливаются")
+                    .changed()
+                {
+                    go = self.online.searched;
+                }
+            }
+        });
+
+        if go && self.online.pending.is_none() && has_key {
             self.start_search(&ctx, false);
         }
         ui.add_space(8.0);
@@ -1053,9 +1199,14 @@ impl App {
             && self.online.error.is_none()
         {
             ui.label(
-                RichText::new("Ничего не нашлось. Попробуйте английское слово или другой тип.")
-                    .color(INK_SUBTLE),
+                RichText::new(
+                    "Ничего не нашлось. Попробуйте другой вайб, источник или английское слово.",
+                )
+                .color(INK_SUBTLE),
             );
+        }
+        if !self.online.searched && has_key {
+            ui.label(RichText::new("Выберите вайб или введите запрос.").color(INK_SUBTLE));
         }
 
         let in_library: HashSet<String> = self
@@ -1103,7 +1254,9 @@ impl App {
                         if r.duration > 0.0 {
                             meta.push(online::human_duration(r.duration));
                         }
-                        meta.push(online::human_size(r.size));
+                        if r.size > 0 {
+                            meta.push(online::human_size(r.size));
+                        }
                         ui.label(RichText::new(meta.join(" · ")).size(12.0).color(INK_SUBTLE));
                         let credit = [r.license.as_str(), r.author.as_str()]
                             .iter()
@@ -1136,7 +1289,11 @@ impl App {
                                 download = Some(r.clone());
                             }
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.link("Страница").clicked() {
+                                if ui
+                                    .link(r.site.label())
+                                    .on_hover_text("Страница файла")
+                                    .clicked()
+                                {
                                     open_page = Some(r.page.clone());
                                 }
                             });
@@ -1226,6 +1383,36 @@ impl App {
                 );
             });
             ui.add_space(16.0);
+            let mut keys = (self.settings.pexels_key.clone(), self.settings.pixabay_key.clone());
+            card_frame().inner_margin(Margin::same(24)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                eyebrow(ui, "Ключи источников");
+                ui.label(
+                    RichText::new("Pexels и Pixabay выдают бесплатный ключ API. Он хранится только на этом компьютере.")
+                        .color(INK_SUBTLE),
+                );
+                for (site, key) in [(Site::Pexels, &mut keys.0), (Site::Pixabay, &mut keys.1)] {
+                    ui.horizontal(|ui| {
+                        ui.add_sized([90.0, 20.0], egui::Label::new(site.label()));
+                        ui.add(
+                            egui::TextEdit::singleline(key)
+                                .hint_text("Ключ API")
+                                .password(true)
+                                .desired_width(320.0)
+                                .margin(Margin::symmetric(12, 8)),
+                        );
+                        if ui.link("Получить ключ").clicked() {
+                            system::open(site.key_url());
+                        }
+                    });
+                }
+            });
+            if keys.0 != self.settings.pexels_key || keys.1 != self.settings.pixabay_key {
+                self.settings.pexels_key = keys.0;
+                self.settings.pixabay_key = keys.1;
+                self.save_settings();
+            }
+            ui.add_space(16.0);
             card_frame().inner_margin(Margin::same(24)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 eyebrow(ui, "Файлы");
@@ -1244,7 +1431,12 @@ impl App {
             card_frame().inner_margin(Margin::same(24)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 eyebrow(ui, "О программе");
-                ui.label(format!("Версия {}", env!("CARGO_PKG_VERSION")));
+                ui.horizontal(|ui| {
+                    ui.label(format!("Vibewall {}", env!("CARGO_PKG_VERSION")));
+                    if secondary_button(ui, "Проверить обновления").clicked() {
+                        system::open(RELEASES_URL);
+                    }
+                });
                 let mpv = match &self.mpv_error {
                     None => "mpv найден".to_string(),
                     Some(e) => format!("mpv не найден: {e}"),
@@ -1256,7 +1448,8 @@ impl App {
                 ui.label(
                     RichText::new(
                         "Видео и звук играет mpv (libmpv, лицензия GPL; исходники — mpv.io). \
-                         Открытые ресурсы — Wikimedia Commons, у каждого файла своя свободная лицензия.",
+                         Открытые ресурсы — Pexels, Pixabay, NASA, Openverse и Викисклад; \
+                         у каждого файла своя лицензия, она видна в карточке.",
                     )
                     .color(INK_SUBTLE),
                 );

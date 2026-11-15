@@ -1,4 +1,4 @@
-//! «Живые обои» — видео, анимация и звук на рабочем столе Windows.
+//! Vibewall — живые обои для Windows: видео, анимация и звук на рабочем столе.
 #![cfg_attr(
     all(windows, not(debug_assertions), not(test)),
     windows_subsystem = "windows"
@@ -14,6 +14,7 @@ mod library;
 mod log;
 mod mpv;
 mod online;
+mod sources;
 #[cfg(windows)]
 mod system;
 #[cfg(windows)]
@@ -26,7 +27,7 @@ mod ui;
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("«Живые обои» работают только в Windows.");
+    eprintln!("Vibewall работает только в Windows.");
     std::process::exit(1);
 }
 
@@ -34,7 +35,7 @@ fn main() {
 fn main() -> eframe::Result {
     use eframe::egui;
 
-    // Отчёт для поиска неполадок: `zhivye-oboi.exe --diagnose отчёт.txt`.
+    // Отчёт для поиска неполадок: `vibewall.exe --diagnose отчёт.txt`.
     let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--diagnose") {
         let out = args
@@ -50,6 +51,7 @@ fn main() -> eframe::Result {
         });
     }
 
+    library::migrate_old_dir();
     install_panic_hook();
     log::write(&format!(
         "запуск {} {:?}",
@@ -86,10 +88,11 @@ fn main() -> eframe::Result {
         });
         start_watchdog(opengl, args[1..].to_vec());
     }
+    let (rgba, width, height) = tray::icon_rgba(256);
     let icon = egui::IconData {
-        rgba: tray::icon_rgba(64),
-        width: 64,
-        height: 64,
+        rgba,
+        width,
+        height,
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -238,7 +241,7 @@ fn install_panic_hook() {
 fn diagnose() -> String {
     use std::fmt::Write;
     let mut r = String::new();
-    let _ = writeln!(r, "Живые обои {}", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(r, "Vibewall {}", env!("CARGO_PKG_VERSION"));
     let tail = log::tail(30);
     if !tail.is_empty() {
         let _ = writeln!(r, "--- журнал ---\n{tail}\n--------------");

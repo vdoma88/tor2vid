@@ -108,7 +108,7 @@ mod tests {
             eprintln!("libmpv нет — пропуск");
             return;
         }
-        let dir = std::env::temp_dir().join(format!("oboi-thumb-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vibewall-thumb-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let job = Job {
             id: "t1".into(),

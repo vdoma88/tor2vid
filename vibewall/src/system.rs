@@ -16,7 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 /// Сообщение управляющему окну: «покажи панель» (от второго запуска).
 pub const WM_SHOW_PANEL: u32 = WM_APP + 1;
-pub const CONTROLLER_CLASS: PCWSTR = w!("ZhivyeOboiController");
+pub const CONTROLLER_CLASS: PCWSTR = w!("VibewallController");
 
 static PANEL: OnceLock<Panel> = OnceLock::new();
 
@@ -59,14 +59,16 @@ pub fn error_box(text: &str) {
         MessageBoxW(
             None,
             &HSTRING::from(text),
-            &HSTRING::from("Живые обои"),
+            &HSTRING::from("Vibewall"),
             MB_OK | MB_ICONERROR,
         );
     }
 }
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-const RUN_NAME: PCWSTR = w!("ZhivyeOboi");
+const RUN_NAME: PCWSTR = w!("Vibewall");
+/// Имя автозапуска до переименования — убираем при включении нового.
+const OLD_RUN_NAME: PCWSTR = w!("ZhivyeOboi");
 
 /// Запуск вместе с Windows: запись в HKCU\…\Run, программа стартует
 /// свёрнутой в трей и восстанавливает обои.
@@ -76,6 +78,8 @@ pub fn set_autostart(on: bool) -> Result<(), String> {
         RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, None, KEY_SET_VALUE, &mut key)
             .ok()
             .map_err(|e| e.to_string())?;
+        // Запись от версии до переименования больше не нужна.
+        let _ = RegDeleteValueW(key, OLD_RUN_NAME);
         let res = if on {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
             let value = format!("\"{}\" --tray", exe.display());

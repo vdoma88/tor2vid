@@ -1,5 +1,5 @@
 //! Библиотека обоев и настройки. Всё лежит в
-//! `%LOCALAPPDATA%\zhivye-oboi`: library.json, settings.json, папки
+//! `%LOCALAPPDATA%\Vibewall`: library.json, settings.json, папки
 //! media (скачанное) и thumbs (превью).
 
 use std::collections::HashMap;
@@ -125,6 +125,9 @@ pub struct Settings {
     pub music_on: bool,
     pub music_volume: u8,
     pub music_shuffle: bool,
+    /// Бесплатные ключи API источников (хранятся только на этом компьютере).
+    pub pexels_key: String,
+    pub pixabay_key: String,
 }
 
 impl Default for Settings {
@@ -141,7 +144,24 @@ impl Default for Settings {
             music_on: false,
             music_volume: 50,
             music_shuffle: false,
+            pexels_key: String::new(),
+            pixabay_key: String::new(),
         }
+    }
+}
+
+/// Папка программы в `%LOCALAPPDATA%`.
+pub const APP_DIR: &str = "Vibewall";
+const OLD_APP_DIR: &str = "zhivye-oboi";
+static MIGRATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Папка до переименования «Живые обои» → Vibewall переезжает целиком.
+/// Вызывать до любой записи в папку программы (в том числе журнала).
+pub fn migrate_old_dir() {
+    let base = dirs::data_local_dir().unwrap_or_else(std::env::temp_dir);
+    let (old, root) = (base.join(OLD_APP_DIR), base.join(APP_DIR));
+    if !root.exists() && old.is_dir() && fs::rename(&old, &root).is_ok() {
+        MIGRATED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -154,9 +174,10 @@ pub struct Paths {
 
 impl Paths {
     pub fn new() -> Paths {
+        migrate_old_dir();
         let root = dirs::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
-            .join("zhivye-oboi");
+            .join(APP_DIR);
         let p = Paths {
             media: root.join("media"),
             thumbs: root.join("thumbs"),
@@ -211,10 +232,26 @@ pub struct Library {
 impl Library {
     pub fn load(paths: &Paths) -> Library {
         let file = paths.root.join("library.json");
-        Library {
-            items: read_json(&file),
-            file,
+        let mut items: Vec<Item> = read_json(&file);
+        // Пути к скачанному и превью вели в старую папку — переписываем.
+        if let Some(old) = paths.root.parent().map(|b| b.join(OLD_APP_DIR)) {
+            let fix = |p: &mut PathBuf| {
+                if let Ok(rest) = p.strip_prefix(&old) {
+                    *p = paths.root.join(rest);
+                }
+            };
+            for it in &mut items {
+                fix(&mut it.file);
+                if let Some(t) = it.thumb.as_mut() {
+                    fix(t);
+                }
+            }
         }
+        let lib = Library { items, file };
+        if MIGRATED.load(std::sync::atomic::Ordering::Relaxed) {
+            lib.save();
+        }
+        lib
     }
 
     pub fn save(&self) {
@@ -341,7 +378,7 @@ mod tests {
 
     #[test]
     fn unique_names() {
-        let dir = std::env::temp_dir().join(format!("oboi-uniq-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vibewall-uniq-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("a.webm"), b"x").unwrap();
         assert_eq!(unique_path(&dir, "a.webm"), dir.join("a (2).webm"));

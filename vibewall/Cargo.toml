@@ -1,13 +1,13 @@
 [package]
-name = "zhivye-oboi"
-version = "0.1.1"
+name = "vibewall"
+version = "0.2.0"
 edition = "2021"
-description = "Живые обои для Windows: видео, анимация и звук на рабочем столе"
+description = "Vibewall — живые обои для Windows: видео, анимация и звук на рабочем столе"
 license = "ISC"
 publish = false
 
 [[bin]]
-name = "zhivye-oboi"
+name = "vibewall"
 path = "src/main.rs"
 
 [dependencies]
@@ -34,8 +34,8 @@ windows = { version = "0.62", features = [
   "Win32_UI_HiDpi",
 ] }
 
-[target.'cfg(windows)'.build-dependencies]
-embed-manifest = "1.5"
+[build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 opt-level = 3

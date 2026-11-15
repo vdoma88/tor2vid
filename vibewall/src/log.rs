@@ -1,4 +1,4 @@
-//! Журнал в `%LOCALAPPDATA%\zhivye-oboi\log.txt`: окно программы без
+//! Журнал в `%LOCALAPPDATA%\Vibewall\log.txt`: окно программы без
 //! консоли, поэтому всё, что пошло не так, должно остаться в файле.
 
 use std::fs::OpenOptions;
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 pub fn path() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("zhivye-oboi")
+        .join(crate::library::APP_DIR)
         .join("log.txt")
 }
 
