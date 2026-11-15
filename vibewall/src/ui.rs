@@ -130,7 +130,7 @@ impl App {
             lib_search: String::new(),
             thumbs,
             online: OnlineState {
-                site: Site::Pexels,
+                site: Site::Pixabay,
                 query: String::new(),
                 kind: Kind::Video,
                 quality: Quality::FullHd,
@@ -1081,20 +1081,24 @@ impl App {
         let has_key = !site.needs_key() || !self.key_for(site).is_empty();
         if !has_key {
             let mut save = None;
+            let mut switch_to = None;
             card_frame().inner_margin(Margin::same(16)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(
-                    RichText::new(format!("Нужен бесплатный ключ {}", site.label()))
-                        .font(semibold(15.0))
-                        .color(INK),
-                );
-                ui.label(
-                    RichText::new(
-                        "Минута: зарегистрируйтесь, скопируйте ключ API и вставьте сюда. \
-                         Ключ хранится только на этом компьютере.",
+                let (title, hint) = if site.keys_paused() {
+                    (
+                        format!("Нужен ключ {} — новые сейчас не выдаются", site.label()),
+                        "Если ключ у вас уже есть — вставьте его. Если нет, \
+                         возьмите Pixabay: там похожие видео, а ключ выдают сразу.",
                     )
-                    .color(INK_SUBTLE),
-                );
+                } else {
+                    (
+                        format!("Нужен бесплатный ключ {}", site.label()),
+                        "Минута: зарегистрируйтесь, на странице API ключ уже будет \
+                         написан — скопируйте его сюда. Ключ хранится только на этом компьютере.",
+                    )
+                };
+                ui.label(RichText::new(title).font(semibold(15.0)).color(INK));
+                ui.label(RichText::new(hint).color(INK_SUBTLE));
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.online.key_input)
@@ -1107,11 +1111,18 @@ impl App {
                     {
                         save = Some(self.online.key_input.trim().to_string());
                     }
-                    if ui.link("Получить ключ").clicked() {
+                    if site.keys_paused() {
+                        if ui.link("Перейти на Pixabay").clicked() {
+                            switch_to = Some(Site::Pixabay);
+                        }
+                    } else if ui.link("Получить ключ").clicked() {
                         system::open(site.key_url());
                     }
                 });
             });
+            if let Some(s) = switch_to {
+                self.online.site = s;
+            }
             if let Some(k) = save {
                 self.set_key(site, k);
                 self.online.key_input.clear();
@@ -1388,10 +1399,13 @@ impl App {
                 ui.set_width(ui.available_width());
                 eyebrow(ui, "Ключи источников");
                 ui.label(
-                    RichText::new("Pexels и Pixabay выдают бесплатный ключ API. Он хранится только на этом компьютере.")
+                    RichText::new(
+                        "Pixabay выдаёт бесплатный ключ API сразу после регистрации. Pexels новые ключи \
+                         сейчас не выдаёт — поле для тех, у кого ключ уже есть. Ключи хранятся только на этом компьютере.",
+                    )
                         .color(INK_SUBTLE),
                 );
-                for (site, key) in [(Site::Pexels, &mut keys.0), (Site::Pixabay, &mut keys.1)] {
+                for (site, key) in [(Site::Pixabay, &mut keys.1), (Site::Pexels, &mut keys.0)] {
                     ui.horizontal(|ui| {
                         ui.add_sized([90.0, 20.0], egui::Label::new(site.label()));
                         ui.add(
@@ -1401,7 +1415,7 @@ impl App {
                                 .desired_width(320.0)
                                 .margin(Margin::symmetric(12, 8)),
                         );
-                        if ui.link("Получить ключ").clicked() {
+                        if !site.keys_paused() && ui.link("Получить ключ").clicked() {
                             system::open(site.key_url());
                         }
                     });

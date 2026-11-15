@@ -21,12 +21,14 @@ pub enum Site {
 }
 
 impl Site {
+    /// Порядок в программе. Pixabay — первым: его ключ выдаётся сразу.
+    /// Pexels — последним: выдачу новых ключей он приостановил.
     pub const ALL: [Site; 5] = [
-        Site::Pexels,
         Site::Pixabay,
         Site::Nasa,
         Site::Openverse,
         Site::Commons,
+        Site::Pexels,
     ];
 
     pub fn label(self) -> &'static str {
@@ -42,8 +44,8 @@ impl Site {
     /// Чем источник хорош — подпись под выбором.
     pub fn tagline(self) -> &'static str {
         match self {
-            Site::Pexels => "Эстетичные видео в 4K: неон, города ночью, лоу-фай, природа. Лицензия Pexels — бесплатно, без указания автора.",
-            Site::Pixabay => "Видео и анимации-петли: абстракции, частицы, ретровейв. Лицензия Pixabay — бесплатно.",
+            Site::Pexels => "Эстетичные видео в 4K: неон, города ночью, лоу-фай. Лицензия Pexels — бесплатно. Новые ключи Pexels сейчас не выдаёт — подойдёт, если ключ у вас уже есть.",
+            Site::Pixabay => "Видео в 4K и анимации-петли: неон, абстракции, частицы, ретровейв, природа. Лицензия Pixabay — бесплатно.",
             Site::Nasa => "Космос от NASA: туманности, Земля с орбиты, полярные сияния. Общественное достояние.",
             Site::Openverse => "Картинки и музыка под Creative Commons: фото, арт, эмбиент и лоу-фай для фона.",
             Site::Commons => "Викисклад: видео, GIF, картинки и звук под свободными лицензиями.",
@@ -60,6 +62,11 @@ impl Site {
         }
     }
 
+    /// Новые ключи сейчас не выдаются (Pexels, с осени 2026).
+    pub fn keys_paused(self) -> bool {
+        self == Site::Pexels
+    }
+
     pub fn needs_key(self) -> bool {
         matches!(self, Site::Pexels | Site::Pixabay)
     }
@@ -67,8 +74,8 @@ impl Site {
     /// Где взять бесплатный ключ API.
     pub fn key_url(self) -> &'static str {
         match self {
-            Site::Pexels => "https://www.pexels.com/api/new/",
-            Site::Pixabay => "https://pixabay.com/api/docs/",
+            Site::Pexels => "https://www.pexels.com/api/",
+            Site::Pixabay => "https://pixabay.com/api/docs/#api_search_videos",
             _ => "",
         }
     }
