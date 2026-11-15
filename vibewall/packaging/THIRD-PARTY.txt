@@ -1,0 +1,31 @@
+Vibewall — сторонние компоненты и лицензии
+==========================================
+
+mpv / libmpv (libmpv-2.dll)
+  Проигрыватель видео и звука. Сборка shinchiro/mpv-winbuild-cmake,
+  лицензия GPL-2.0-or-later (в составе есть компоненты под GPL и LGPL).
+  Исходники: https://mpv.io и https://github.com/mpv-player/mpv
+  Сборка: https://github.com/shinchiro/mpv-winbuild-cmake
+
+FFmpeg (внутри libmpv-2.dll)
+  https://ffmpeg.org — GPL/LGPL, исходники по ссылке.
+
+egui / eframe, winit, wgpu, glow, ureq, rustls, serde, image, tray-icon,
+rfd, windows-rs и другие библиотеки Rust
+  Лицензии MIT и/или Apache-2.0 (у некоторых — также BSD, ISC, Zlib,
+  Unicode-3.0). Полный список — Cargo.lock в исходниках программы:
+  https://github.com/vdoma88/tor2vid/tree/HEAD/vibewall
+
+Шрифт интерфейса
+  Segoe UI из Windows (не распространяется с программой); запасные шрифты
+  egui (Ubuntu Font Licence, OFL).
+
+Открытые ресурсы
+  Файлы из Pexels, Pixabay, NASA, Openverse и Викисклада не входят в
+  программу. Их скачивает пользователь; лицензия и автор каждого файла
+  сохраняются в библиотеке и видны в карточке.
+  Pexels: https://www.pexels.com/license/
+  Pixabay: https://pixabay.com/service/license-summary/
+  NASA: https://www.nasa.gov/nasa-brand-center/images-and-media/
+  Openverse: https://openverse.org — лицензии Creative Commons.
+  Викисклад: https://commons.wikimedia.org — свободные лицензии.

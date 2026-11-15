@@ -480,7 +480,7 @@ fn create_controller() -> Option<HWND> {
         let hwnd = CreateWindowExW(
             WS_EX_TOOLWINDOW,
             class,
-            w!("Живые обои — управление"),
+            w!("Vibewall — управление"),
             WS_OVERLAPPED,
             0,
             0,

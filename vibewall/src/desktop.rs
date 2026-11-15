@@ -202,7 +202,7 @@ unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
     }
 }
 
-const HOST_CLASS: PCWSTR = w!("ZhivyeOboiHost");
+const HOST_CLASS: PCWSTR = w!("VibewallHost");
 
 fn register_class() {
     static ONCE: Once = Once::new();
@@ -228,7 +228,7 @@ pub fn create_host(layer: Layer, monitor: &Monitor) -> Option<HWND> {
         let hwnd = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             HOST_CLASS,
-            w!("Живые обои"),
+            w!("Vibewall"),
             WS_POPUP,
             monitor.rect.left,
             monitor.rect.top,

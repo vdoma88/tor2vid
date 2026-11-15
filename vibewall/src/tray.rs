@@ -8,46 +8,28 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 use crate::engine;
 use crate::system::Panel;
 
-/// Значок 32×32: квадрат цвета акцента со скруглением и белым «play».
-pub fn icon_rgba(size: u32) -> Vec<u8> {
-    let mut px = vec![0u8; (size * size * 4) as usize];
-    let s = size as f32;
-    let r = s * 0.22;
-    for y in 0..size {
-        for x in 0..size {
-            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-            // Скруглённый квадрат.
-            let dx = (r - fx).max(fx - (s - r)).max(0.0);
-            let dy = (r - fy).max(fy - (s - r)).max(0.0);
-            let corner = (dx * dx + dy * dy).sqrt();
-            let alpha = (r - corner + 0.5).clamp(0.0, 1.0);
-            if alpha <= 0.0 {
-                continue;
-            }
-            // Треугольник «play».
-            let (ax, ay, h) = (s * 0.38, s * 0.28, s * 0.44);
-            let t = (fy - ay) / h;
-            let inside = (0.0..=1.0).contains(&t)
-                && fx >= ax
-                && fx <= ax + (1.0 - (2.0 * t - 1.0).abs()) * s * 0.36;
-            let (cr, cg, cb) = if inside {
-                (255, 255, 255)
-            } else {
-                (0x5e, 0x6a, 0xd2)
-            };
-            let i = ((y * size + x) * 4) as usize;
-            px[i] = cr;
-            px[i + 1] = cg;
-            px[i + 2] = cb;
-            px[i + 3] = (alpha * 255.0) as u8;
+/// Иконка Vibewall (assets/icon-*.png, нарисована из assets/icon.svg)
+/// как RGBA: 32 точки — для трея, 256 — для окна.
+pub fn icon_rgba(size: u32) -> (Vec<u8>, u32, u32) {
+    let png: &[u8] = if size <= 32 {
+        include_bytes!("../assets/icon-32.png")
+    } else {
+        include_bytes!("../assets/icon-256.png")
+    };
+    match image::load_from_memory_with_format(png, image::ImageFormat::Png) {
+        Ok(img) => {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            (rgba.into_raw(), w, h)
         }
+        // Встроенный PNG проверен сборкой; на всякий случай — пустая иконка.
+        Err(_) => (vec![0; 4], 1, 1),
     }
-    px
 }
 
 pub fn create(panel: Panel, ctx: eframe::egui::Context) -> Option<TrayIcon> {
     let menu = Menu::new();
-    let open = MenuItem::new("Открыть «Живые обои»", true, None);
+    let open = MenuItem::new("Открыть Vibewall", true, None);
     let pause = MenuItem::new("Пауза / продолжить", true, None);
     let quit = MenuItem::new("Выход", true, None);
     let _ = menu.append_items(&[&open, &pause, &PredefinedMenuItem::separator(), &quit]);
@@ -78,11 +60,12 @@ pub fn create(panel: Panel, ctx: eframe::egui::Context) -> Option<TrayIcon> {
         }
     }));
 
-    let icon = Icon::from_rgba(icon_rgba(32), 32, 32).ok()?;
+    let (rgba, w, h) = icon_rgba(32);
+    let icon = Icon::from_rgba(rgba, w, h).ok()?;
     TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
-        .with_tooltip("Живые обои")
+        .with_tooltip("Vibewall")
         .with_icon(icon)
         .build()
         .ok()

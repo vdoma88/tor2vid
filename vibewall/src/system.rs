@@ -10,13 +10,13 @@ use windows::Win32::System::Registry::{
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, PostMessageW, SetForegroundWindow, ShowWindow, SW_HIDE, SW_RESTORE, SW_SHOWNORMAL,
-    WM_APP,
+    FindWindowW, MessageBoxW, SendMessageTimeoutW, SetForegroundWindow, ShowWindow, MB_ICONERROR,
+    MB_OK, SMTO_ABORTIFHUNG, SW_HIDE, SW_RESTORE, SW_SHOWNORMAL, WM_APP,
 };
 
 /// Сообщение управляющему окну: «покажи панель» (от второго запуска).
 pub const WM_SHOW_PANEL: u32 = WM_APP + 1;
-pub const CONTROLLER_CLASS: PCWSTR = w!("ZhivyeOboiController");
+pub const CONTROLLER_CLASS: PCWSTR = w!("VibewallController");
 
 static PANEL: OnceLock<Panel> = OnceLock::new();
 
@@ -30,21 +30,45 @@ pub fn show_panel() {
     }
 }
 
-/// Программа уже запущена? Тогда просим её показать окно.
+/// Программа уже запущена? Тогда просим её показать окно. Если та копия
+/// не отвечает (зависла), запускаемся как обычно.
 pub fn signal_running_instance() -> bool {
     unsafe {
         match FindWindowW(CONTROLLER_CLASS, PCWSTR::null()) {
             Ok(h) if !h.is_invalid() => {
-                let _ = PostMessageW(Some(h), WM_SHOW_PANEL, WPARAM(0), LPARAM(0));
-                true
+                let mut result = 0usize;
+                SendMessageTimeoutW(
+                    h,
+                    WM_SHOW_PANEL,
+                    WPARAM(0),
+                    LPARAM(0),
+                    SMTO_ABORTIFHUNG,
+                    3000,
+                    Some(&mut result),
+                )
+                .0 != 0
             }
             _ => false,
         }
     }
 }
 
+/// Окно с ошибкой — у программы нет консоли, иначе сбой был бы немым.
+pub fn error_box(text: &str) {
+    unsafe {
+        MessageBoxW(
+            None,
+            &HSTRING::from(text),
+            &HSTRING::from("Vibewall"),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-const RUN_NAME: PCWSTR = w!("ZhivyeOboi");
+const RUN_NAME: PCWSTR = w!("Vibewall");
+/// Имя автозапуска до переименования — убираем при включении нового.
+const OLD_RUN_NAME: PCWSTR = w!("ZhivyeOboi");
 
 /// Запуск вместе с Windows: запись в HKCU\…\Run, программа стартует
 /// свёрнутой в трей и восстанавливает обои.
@@ -54,6 +78,8 @@ pub fn set_autostart(on: bool) -> Result<(), String> {
         RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, None, KEY_SET_VALUE, &mut key)
             .ok()
             .map_err(|e| e.to_string())?;
+        // Запись от версии до переименования больше не нужна.
+        let _ = RegDeleteValueW(key, OLD_RUN_NAME);
         let res = if on {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
             let value = format!("\"{}\" --tray", exe.display());
@@ -107,4 +133,14 @@ impl Panel {
             let _ = ShowWindow(self.0, SW_HIDE);
         }
     }
+}
+
+/// Текст из буфера обмена — для кнопки «Вставить» у полей ключей.
+pub fn clipboard_text() -> Option<String> {
+    arboard::Clipboard::new()
+        .ok()?
+        .get_text()
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
 }

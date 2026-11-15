@@ -1,0 +1,125 @@
+name: Vibewall для Windows
+
+# Приложение на Rust из папки vibewall/. Релиз — vibewall-v<версия из
+# vibewall/Cargo.toml>: портативный архив и установщик. Релиз не становится
+# «последним», чтобы не перекрывать релиз tor2vid.
+#
+# Необязательные секреты репозитория VIBEWALL_PEXELS_KEY и
+# VIBEWALL_PIXABAY_KEY вшиваются в сборку как ключи по умолчанию; без них
+# пользователь вводит свой бесплатный ключ в программе.
+on:
+  push:
+    paths:
+      - vibewall/**
+      - .github/workflows/vibewall.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: vibewall
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VIBEWALL_PEXELS_KEY: ${{ secrets.VIBEWALL_PEXELS_KEY }}
+      VIBEWALL_PIXABAY_KEY: ${{ secrets.VIBEWALL_PIXABAY_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Кэш cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            vibewall/target
+          key: vibewall-${{ hashFiles('vibewall/Cargo.lock') }}
+
+      - name: libmpv (сборка shinchiro/mpv-winbuild-cmake)
+        run: |
+          set -e
+          mkdir -p ../mpv
+          gh release download -R shinchiro/mpv-winbuild-cmake --pattern 'mpv-dev-x86_64-2*.7z' -D ../mpv
+          cd ../mpv && 7z x -y mpv-dev-*.7z > /dev/null && ls
+
+      - name: Тесты (с настоящим libmpv)
+        run: |
+          export PATH="$(cd ../mpv && pwd -W):$PATH"
+          cargo test --release
+
+      - name: Сборка
+        run: cargo build --release
+
+      - name: Собрать папку
+        run: |
+          set -e
+          D=../dist/vibewall
+          mkdir -p "$D"
+          cp target/release/vibewall.exe "$D/"
+          cp ../mpv/libmpv-2.dll "$D/"
+          cp packaging/README.txt packaging/THIRD-PARTY.txt "$D/"
+
+      - name: Проверка — mpv, мониторы, слой рабочего стола
+        working-directory: dist/vibewall
+        run: |
+          set -e
+          ./vibewall.exe --diagnose ../diagnose.txt || { cat ../diagnose.txt; exit 1; }
+          cat ../diagnose.txt
+          grep -q '^mpv: mpv' ../diagnose.txt
+
+      - name: Проверка — окно запускается и не падает
+        working-directory: dist/vibewall
+        run: |
+          # На раннере нет видеокарты: OpenGL может не подняться, тогда
+          # программа сама перезапускается через wgpu (WARP) — ждём до 60 с.
+          LOG="$LOCALAPPDATA/Vibewall/log.txt"
+          ./vibewall.exe &
+          for i in $(seq 1 30); do
+            sleep 2
+            grep -q 'окно показано' "$LOG" 2>/dev/null && break
+          done
+          cat "$LOG" || true
+          tasklist //FI "IMAGENAME eq vibewall.exe" | tee ../tasks.txt
+          grep -q 'окно показано' "$LOG"
+          grep -qi vibewall ../tasks.txt
+          taskkill //F //IM vibewall.exe
+
+      - name: Архив
+        working-directory: dist
+        run: 7z a -tzip vibewall-windows-x64.zip vibewall > /dev/null
+
+      - name: Установщик (Inno Setup)
+        run: |
+          set -e
+          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          if [ ! -f "$ISCC" ]; then choco install innosetup -y --no-progress > /dev/null; fi
+          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          "$ISCC" //DAppVersion="$V" packaging/vibewall.iss
+          ls -la ../dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vibewall-windows-x64
+          path: |
+            dist/vibewall-windows-x64.zip
+            dist/VibewallSetup-*.exe
+
+      - name: Релиз на GitHub
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          set -e
+          R="${{ github.repository }}"
+          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          TAG="vibewall-v$V"
+          FILES="../dist/vibewall-windows-x64.zip ../dist/VibewallSetup-$V.exe"
+          if gh release view "$TAG" -R "$R" > /dev/null 2>&1; then
+            gh release upload "$TAG" $FILES --clobber -R "$R"
+          else
+            gh release create "$TAG" $FILES -R "$R" --target "$GITHUB_SHA" --latest=false \
+              --title "Vibewall $V" --notes-file packaging/RELEASE.md
+          fi
