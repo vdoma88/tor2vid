@@ -422,7 +422,10 @@ impl App {
                     }
                 }
                 Err(e) if e == "Отменено" => {}
-                Err(e) => self.notify_error(format!("{}: {e}", remote.title)),
+                Err(e) => {
+                    crate::log::write(&format!("скачивание «{}»: {e}", remote.title));
+                    self.notify_error(format!("{}: {e}", remote.title));
+                }
             }
         }
 
