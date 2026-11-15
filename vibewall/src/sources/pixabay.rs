@@ -22,7 +22,15 @@ pub fn search(q: &Query) -> Result<SearchResult, String> {
         ("q", q.text.trim().to_string()),
         ("video_type", video_type.to_string()),
         ("safesearch", "true".into()),
-        ("order", "popular".into()),
+        (
+            "order",
+            match q.sort {
+                crate::online::Sort::Popular => "popular",
+                crate::online::Sort::Latest => "latest",
+            }
+            .into(),
+        ),
+        ("editors_choice", q.editors_choice.to_string()),
         ("per_page", PAGE.to_string()),
         ("page", page.to_string()),
     ];
@@ -79,6 +87,7 @@ fn hit(h: &Value, kind: Kind, quality: Quality) -> Option<Remote> {
         duration: f64_of(h, "duration"),
         author: str_of(h, "user").to_string(),
         license: LICENSE.into(),
+        plays: 0,
     })
 }
 

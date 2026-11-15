@@ -147,6 +147,7 @@ fn parse(data: ApiResponse) -> SearchResult {
                 duration: info.duration.unwrap_or(0.0),
                 author: meta(&info, "Artist"),
                 license: meta(&info, "LicenseShortName"),
+                plays: 0,
             })
         })
         .collect();

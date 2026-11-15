@@ -94,6 +94,7 @@ fn item(it: &Value) -> Option<Remote> {
         duration: 0.0,
         author: crate::online::plain(author),
         license: LICENSE.into(),
+        plays: 0,
     })
 }
 

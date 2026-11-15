@@ -94,6 +94,7 @@ fn result(r: &Value, kind: Kind) -> Option<Remote> {
         duration: u64_of(r, "duration") as f64 / 1000.0,
         author: str_of(r, "creator").to_string(),
         license: license(r),
+        plays: 0,
     })
 }
 

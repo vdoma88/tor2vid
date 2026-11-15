@@ -29,3 +29,5 @@ rfd, windows-rs и другие библиотеки Rust
   NASA: https://www.nasa.gov/nasa-brand-center/images-and-media/
   Openverse: https://openverse.org — лицензии Creative Commons.
   Викисклад: https://commons.wikimedia.org — свободные лицензии.
+  Нетлейблы Internet Archive: https://archive.org/details/netlabels —
+  только альбомы с отметкой лицензии Creative Commons.
