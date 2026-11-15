@@ -207,6 +207,53 @@ pub fn spawn_search(
     rx
 }
 
+/// Имя сервера из ссылки: https://cdn.pixabay.com/video/… → cdn.pixabay.com.
+pub fn host_of(url: &str) -> &str {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    rest.split(['/', '?', '#']).next().unwrap_or(rest)
+}
+
+/// Сеть дома и у провайдера иногда «моргает»: имя сервера на миг не
+/// находится или соединение рвётся. Такие сбои повторяем (3 попытки,
+/// паузы 1 и 3 с); ответы сервера с кодом ошибки — нет.
+fn call_with_retry(url: &str) -> Result<ureq::http::Response<ureq::Body>, String> {
+    let host = host_of(url).to_string();
+    let mut last = None;
+    for (attempt, pause) in [0u64, 1, 3].into_iter().enumerate() {
+        if pause > 0 {
+            std::thread::sleep(Duration::from_secs(pause));
+        }
+        match agent().get(&encode_url(url)).call() {
+            Ok(resp) => return Ok(resp),
+            Err(e @ ureq::Error::StatusCode(_)) => return Err(describe(&host, e)),
+            Err(e) => {
+                crate::log::write(&format!("сеть, попытка {}: {host}: {e}", attempt + 1));
+                last = Some(e);
+            }
+        }
+    }
+    Err(match last {
+        Some(e) if is_dns_error(&e) => format!(
+            "Компьютер не нашёл сервер {host} (DNS). Проверьте интернет и попробуйте ещё раз; \
+             если повторяется — сервер может не открываться у вашего провайдера."
+        ),
+        Some(e) => describe(&host, e),
+        None => format!("Нет связи с {host}"),
+    })
+}
+
+/// «Хост неизвестен»: WSAHOST_NOT_FOUND (11001) в Windows, «failed to
+/// lookup address» и подобное в других системах.
+fn is_dns_error(e: &ureq::Error) -> bool {
+    let text = e.to_string().to_lowercase();
+    text.contains("11001")
+        || text.contains("11004")
+        || text.contains("lookup")
+        || text.contains("resolve")
+        || text.contains("name or service not known")
+        || text.contains("хост неизвестен")
+}
+
 /// Скачивает по ссылке в файл, через `.part`, с прогрессом и отменой.
 fn fetch(
     url: &str,
@@ -215,10 +262,7 @@ fn fetch(
     total: &AtomicU64,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
-    let resp = agent()
-        .get(&encode_url(url))
-        .call()
-        .map_err(|e| describe("сервер", e))?;
+    let resp = call_with_retry(url)?;
     if let Some(len) = resp.body().content_length() {
         total.store(len, Ordering::Relaxed);
     }
@@ -487,6 +531,15 @@ mod tests {
             "https://x/a%20b?q=1&w=2"
         );
         assert_eq!(encode_url("https://x/ё"), "https://x/%D1%91");
+    }
+
+    #[test]
+    fn hosts_from_urls() {
+        assert_eq!(
+            host_of("https://cdn.pixabay.com/video/1/a.mp4"),
+            "cdn.pixabay.com"
+        );
+        assert_eq!(host_of("https://archive.org?x=1"), "archive.org");
     }
 
     #[test]
