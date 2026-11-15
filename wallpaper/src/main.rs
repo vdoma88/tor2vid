@@ -64,12 +64,28 @@ fn main() -> eframe::Result {
         return Ok(());
     }
 
-    // Отрисовка: сначала wgpu (DirectX 12 / Vulkan). Если на этом компьютере
-    // он не поднимается, перезапускаемся с OpenGL (`--opengl`): второй цикл
-    // событий winit в том же процессе создать нельзя.
-    let opengl = args.iter().any(|a| a == "--opengl");
-
-    let tray_start = std::env::args().any(|a| a == "--tray");
+    // Отрисовка: сначала OpenGL, запасной вариант — wgpu (DirectX 12 /
+    // Vulkan, в том числе программный WARP без видеокарты). Сбой отрисовки
+    // часто не ошибка, а зависание или падение в драйвере, поэтому выбор
+    // запоминается в renderer.txt, а сторож переключает способ, если окно
+    // не появилось. Второй цикл событий winit в одном процессе создать
+    // нельзя — переключение только перезапуском.
+    let tray_start = args.iter().any(|a| a == "--tray");
+    let opengl = choose_opengl(&args);
+    ui::USING_OPENGL.store(opengl, std::sync::atomic::Ordering::Relaxed);
+    log::write(if opengl {
+        "отрисовка: OpenGL"
+    } else {
+        "отрисовка: wgpu"
+    });
+    if !tray_start {
+        set_renderer_state(if opengl {
+            "opengl-starting"
+        } else {
+            "wgpu-starting"
+        });
+        start_watchdog(opengl, args[1..].to_vec());
+    }
     let icon = egui::IconData {
         rgba: tray::icon_rgba(64),
         width: 64,
@@ -98,19 +114,8 @@ fn main() -> eframe::Result {
     if let Err(e) = &result {
         let renderer = if opengl { "OpenGL" } else { "wgpu" };
         log::write(&format!("окно не открылось ({renderer}): {e}"));
-        if !opengl {
-            if let Ok(exe) = std::env::current_exe() {
-                let mut child_args: Vec<String> = args[1..].to_vec();
-                child_args.push("--opengl".into());
-                if std::process::Command::new(exe)
-                    .args(&child_args)
-                    .spawn()
-                    .is_ok()
-                {
-                    log::write("перезапуск с OpenGL");
-                    return Ok(());
-                }
-            }
+        if switch_renderer(opengl, &args[1..]) {
+            return Ok(());
         }
         system::error_box(&format!(
             "Не удалось открыть окно программы.\n\n{e}\n\n\
@@ -119,6 +124,98 @@ fn main() -> eframe::Result {
         ));
     }
     result
+}
+
+fn renderer_file() -> std::path::PathBuf {
+    log::path().with_file_name("renderer.txt")
+}
+
+#[cfg(windows)]
+pub fn set_renderer_state(state: &str) {
+    let _ = std::fs::write(renderer_file(), state);
+}
+
+/// `--opengl` / `--wgpu` — явный выбор. Иначе — что сработало в прошлый
+/// раз; если прошлый запуск так и не показал окно (`*-starting`), берём
+/// другой способ. По умолчанию OpenGL.
+#[cfg(windows)]
+fn choose_opengl(args: &[String]) -> bool {
+    if args.iter().any(|a| a == "--opengl") {
+        return true;
+    }
+    if args.iter().any(|a| a == "--wgpu") {
+        return false;
+    }
+    let state = std::fs::read_to_string(renderer_file()).unwrap_or_default();
+    match state.trim() {
+        "wgpu" => false,
+        "opengl-starting" => {
+            log::write("прошлый запуск с OpenGL не показал окно — пробуем wgpu");
+            false
+        }
+        "wgpu-starting" => {
+            log::write("прошлый запуск с wgpu не показал окно — пробуем OpenGL");
+            true
+        }
+        _ => true,
+    }
+}
+
+/// Перезапуск с другим способом отрисовки. Только один раз за цепочку
+/// (`--fallback`), чтобы не перезапускаться по кругу.
+#[cfg(windows)]
+fn switch_renderer(opengl: bool, args: &[String]) -> bool {
+    if args.iter().any(|a| a == "--fallback") {
+        return false;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let mut child: Vec<String> = args
+        .iter()
+        .filter(|a| *a != "--wgpu" && *a != "--opengl")
+        .cloned()
+        .collect();
+    child.push(if opengl { "--wgpu" } else { "--opengl" }.into());
+    child.push("--fallback".into());
+    let ok = std::process::Command::new(exe).args(&child).spawn().is_ok();
+    if ok {
+        log::write(if opengl {
+            "перезапуск с wgpu"
+        } else {
+            "перезапуск с OpenGL"
+        });
+    }
+    ok
+}
+
+/// Сторож: если окно не нарисовалось за 15 секунд, отрисовка, скорее
+/// всего, зависла в драйвере — перезапускаемся другим способом, а если
+/// уже пробовали оба, честно сообщаем.
+#[cfg(windows)]
+fn start_watchdog(opengl: bool, args: Vec<String>) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(15));
+        if ui::FIRST_FRAME.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let renderer = if opengl { "OpenGL" } else { "wgpu" };
+        log::write(&format!("окно с {renderer} не появилось за 15 с"));
+        set_renderer_state(if opengl {
+            "opengl-starting"
+        } else {
+            "wgpu-starting"
+        });
+        if switch_renderer(opengl, &args) {
+            std::process::exit(3);
+        }
+        system::error_box(&format!(
+            "Окно программы не открылось: видеокарта не отвечает ни через OpenGL, \
+             ни через DirectX/Vulkan.\n\nОбновите драйвер видеокарты. Журнал:\n{}",
+            log::path().display()
+        ));
+        std::process::exit(4);
+    });
 }
 
 /// Падение программы не должно быть молчаливым: пишем в журнал и

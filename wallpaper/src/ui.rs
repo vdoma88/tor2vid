@@ -24,6 +24,10 @@ use crate::thumbs::{self, Thumbnailer};
 
 pub const TITLE: &str = "Живые обои";
 
+/// Первый кадр нарисован — окно точно на экране (для сторожа в main.rs).
+pub static FIRST_FRAME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub static USING_OPENGL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Library,
@@ -68,6 +72,12 @@ fn panel_hwnd(cc: &eframe::CreationContext<'_>) -> Option<HWND> {
         RawWindowHandle::Win32(h) => Some(HWND(h.hwnd.get() as *mut _)),
         _ => None,
     }
+}
+
+/// Адрес файла для загрузчика картинок egui. В Windows нужен вид
+/// `file:///C:/…`: с двумя косыми путь читается как сетевой (`\\C:\…`).
+fn file_uri(path: std::path::Display<'_>) -> String {
+    format!("file:///{path}")
 }
 
 fn cache_name(url: &str) -> String {
@@ -300,7 +310,7 @@ impl App {
     fn poll_background(&mut self, ctx: &egui::Context) {
         while let Ok(done) = self.thumbs.rx.try_recv() {
             if let (Some(item), Some(t)) = (self.lib.get_mut(&done.id), done.thumb) {
-                ctx.forget_image(&format!("file://{}", t.display()));
+                ctx.forget_image(&file_uri(t.display()));
                 item.thumb = Some(t);
                 self.lib.save();
             }
@@ -579,6 +589,15 @@ enum CardAction {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = &ui.ctx().clone();
+        if !FIRST_FRAME.swap(true, Ordering::Relaxed) {
+            let gl = USING_OPENGL.load(Ordering::Relaxed);
+            crate::log::write(if gl {
+                "окно показано (OpenGL)"
+            } else {
+                "окно показано (wgpu)"
+            });
+            crate::set_renderer_state(if gl { "opengl" } else { "wgpu" });
+        }
         self.poll_background(ctx);
 
         // Крестик прячет окно в трей, пока на столе что-то играет.
@@ -874,7 +893,7 @@ impl App {
                             .thumb
                             .as_ref()
                             .filter(|t| t.exists())
-                            .map(|t| format!("file://{}", t.display()));
+                            .map(|t| file_uri(t.display()));
                         preview(ui, inner, src, item.kind);
                         ui.add_space(4.0);
                         ui.add(
@@ -915,7 +934,7 @@ impl App {
                                 badge(ui, "на экране", Some(SUCCESS));
                             }
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.menu_button("⋯", |ui| {
+                                ui.menu_button("···", |ui| {
                                     if ui.button("Показать в папке").clicked() {
                                         action = Some(CardAction::Reveal(item.file.clone()));
                                     }
@@ -1058,7 +1077,7 @@ impl App {
                         let src = r.thumb.as_ref().and_then(|url| {
                             let path = self.paths.cache.join(cache_name(url));
                             if path.exists() {
-                                Some(format!("file://{}", path.display()))
+                                Some(file_uri(path.display()))
                             } else {
                                 if self.online.thumbs_requested.insert(url.clone()) {
                                     let wake = ctx.clone();
